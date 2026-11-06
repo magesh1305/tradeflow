@@ -309,3 +309,106 @@ async def test_reconcile_loop_runs_and_survives_errors() -> None:
         while kite.orders.call_count < 2:  # noqa: ASYNC110 - polling a mock's call count
             await asyncio.sleep(0.01)
     await ex.stop()
+
+
+# --- auto-slicing (freeze quantity) ---------------------------------------------------------
+
+
+def sliced_setup(children: list[dict[str, Any]]) -> tuple[LiveExecutor, MagicMock, Listener]:
+    ex, kite, lst, _ = setup(freeze_limits={"NIFTY": 1800})
+    kite.place_autoslice_order.return_value = {"order_id": "P1", "children": children}
+    return ex, kite, lst
+
+
+def child_upd(child_id: str, status: str, filled: int, avg: float) -> dict[str, Any]:
+    # Auto-slice children carry tag=null (verified in the Kite docs).
+    return {
+        "order_id": child_id,
+        "tag": None,
+        "status": status,
+        "filled_quantity": filled,
+        "average_price": avg,
+    }
+
+
+async def test_order_above_freeze_limit_is_autosliced_and_aggregated() -> None:
+    ex, kite, lst = sliced_setup([{"order_id": "C1"}, {"order_id": "C2"}])
+    o = new_order(qty=3600)
+    ex.submit(o)
+    await settle(ex)
+    kite.place_order.assert_not_called()
+    assert kite.place_autoslice_order.call_args.kwargs["quantity"] == 3600
+    ex.apply_update(child_upd("C1", "COMPLETE", 1800, 100.0))
+    assert o.status is OrderStatus.OPEN and o.filled_quantity == 1800
+    ex.apply_update(child_upd("C2", "UPDATE", 900, 102.0))
+    ex.apply_update(child_upd("C2", "COMPLETE", 1800, 103.0))
+    assert o.status is OrderStatus.COMPLETE
+    assert o.filled_quantity == 3600
+    assert o.average_price == pytest.approx(101.5)
+    assert [(f.quantity, f.price) for f in lst.fills] == [(1800, 100.0), (900, 102.0), (900, 104.0)]
+    assert {f.broker_order_id for f in lst.fills} == {"C1", "C2"}
+
+
+async def test_failed_slice_leaves_partial_fill_cancelled() -> None:
+    ex, _, _ = sliced_setup(
+        [
+            {"order_id": "C1"},
+            {
+                "error": {
+                    "code": 400,
+                    "error_type": "MarginException",
+                    "message": "Insufficient funds",
+                }
+            },
+        ]
+    )
+    o = new_order(qty=3600)
+    ex.submit(o)
+    await settle(ex)
+    ex.apply_update(child_upd("C1", "COMPLETE", 1800, 100.0))
+    assert o.status is OrderStatus.CANCELLED
+    assert o.filled_quantity == 1800
+    assert "partially filled 1800/3600" in o.status_message
+    assert "Insufficient funds" in o.status_message
+
+
+async def test_all_slices_failing_is_a_rejection() -> None:
+    ex, _, _ = sliced_setup([{"error": {"message": "Insufficient funds"}}])
+    o = new_order(qty=3600)
+    ex.submit(o)
+    await settle(ex)
+    assert o.status is OrderStatus.REJECTED
+
+
+async def test_child_update_before_placement_response_is_replayed() -> None:
+    ex, _, lst = sliced_setup([{"order_id": "C1"}, {"order_id": "C2"}])
+    o = new_order(qty=3600)
+    ex.submit(o)
+    ex.apply_update(child_upd("C1", "COMPLETE", 1800, 100.0))  # arrives early: buffered
+    assert lst.fills == []
+    await settle(ex)
+    assert len(lst.fills) == 1 and o.filled_quantity == 1800
+
+
+async def test_cancel_and_reconcile_cover_every_child() -> None:
+    ex, kite, _ = sliced_setup([{"order_id": "C1"}, {"order_id": "C2"}])
+    o = new_order(qty=3600)
+    ex.submit(o)
+    await settle(ex)
+    ex.cancel(o.client_order_id)
+    await settle(ex)
+    assert {c.kwargs["order_id"] for c in kite.cancel_order.call_args_list} == {"C1", "C2"}
+    kite.orders.return_value = [
+        child_upd("C1", "CANCELLED", 0, 0),
+        child_upd("C2", "CANCELLED", 0, 0),
+    ]
+    await ex.reconcile()
+    assert o.status is OrderStatus.CANCELLED
+
+
+async def test_small_orders_are_not_sliced() -> None:
+    ex, kite, _ = sliced_setup([])
+    ex.submit(new_order(qty=1800))
+    await settle(ex)
+    kite.place_order.assert_called_once()
+    kite.place_autoslice_order.assert_not_called()

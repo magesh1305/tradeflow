@@ -36,5 +36,6 @@ class Executor(Protocol):
         *,
         price: float | None = None,
         trigger_price: float | None = None,
+        quantity: int | None = None,
     ) -> None: ...
     def on_tick(self, tick: Tick) -> None: ...

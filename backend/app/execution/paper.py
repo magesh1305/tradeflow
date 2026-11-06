@@ -87,6 +87,7 @@ class PaperExecutor:
         *,
         price: float | None = None,
         trigger_price: float | None = None,
+        quantity: int | None = None,
     ) -> None:
         order = self._open.get(client_order_id)
         if order is None:
@@ -96,6 +97,8 @@ class PaperExecutor:
             order.request.price = inst.round_price(price)
         if trigger_price is not None:
             order.request.trigger_price = inst.round_price(trigger_price)
+        if quantity is not None and quantity > order.filled_quantity:
+            order.request.quantity = quantity
         order.updated_at = self._clock.now()
         self.listener.on_order_update(order)
         tick = self.listener.last_tick(inst.token)
