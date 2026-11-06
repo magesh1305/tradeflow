@@ -58,6 +58,7 @@ def test_scheduler_jobs_and_times(tmp_path: Path) -> None:
         "risk_reset",
         "square_off",
         "end_of_day",
+        "record_candles",
         "session_expiry",
     }
 
@@ -68,6 +69,7 @@ def test_scheduler_jobs_and_times(tmp_path: Path) -> None:
     assert next_fire("risk_reset", MONDAY_8AM) == MONDAY_8AM.replace(hour=9)
     assert next_fire("square_off", MONDAY_8AM) == MONDAY_8AM.replace(hour=15, minute=20)
     assert next_fire("end_of_day", MONDAY_8AM) == MONDAY_8AM.replace(hour=15, minute=35)
+    assert next_fire("record_candles", MONDAY_8AM) == MONDAY_8AM.replace(hour=15, minute=40)
     friday_eve = datetime(2025, 11, 7, 16, 0, tzinfo=IST)
     assert next_fire("end_of_day", friday_eve).date().isoformat() == "2025-11-10"  # skip weekend
     assert next_fire("session_expiry", friday_eve) == datetime(2025, 11, 8, 6, 0, tzinfo=IST)

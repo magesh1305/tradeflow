@@ -23,6 +23,12 @@ from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession
 from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
+from app.data.historical import (
+    HistoryDownloader,
+    HistoryStore,
+    record_underlying,
+    session_bounds,
+)
 from app.engine.engine import TradingEngine
 from app.engine.recovery import (
     PositionDiff,
@@ -48,6 +54,7 @@ class Runtime:
         auth: KiteAuth | None,
         clock: Clock | None = None,
         exit_process: Callable[[], None] | None = None,
+        history: HistoryStore | None = None,
     ) -> None:
         self.settings = settings
         self.notifier = notifier
@@ -55,6 +62,7 @@ class Runtime:
         self.auth = auth
         self.clock = clock or SystemClock()
         self._exit_process = exit_process
+        self.history = history
         self.engine: TradingEngine | None = None
         self.broker: KiteBroker | None = None
         self.recovery: RecoveryReport | None = None
@@ -231,6 +239,39 @@ class Runtime:
             if sid != "__account__":
                 lines.append(f"  {sid}: net {v['net']:.2f}, {int(v['trades'])} fills")
         await self.notifier.send("\n".join(lines), "info")
+
+    async def record_candles(self) -> None:
+        """Daily: store today's 1-minute candles around ATM (expired contracts can't be
+        downloaded later)."""
+        engine, broker, history = self.engine, self.broker, self.history
+        if engine is None or broker is None or history is None:
+            return
+        s = self.settings
+        start, end = session_bounds(self.clock.now().date())
+        downloader = HistoryDownloader(broker, history, s.history_chunk_days)
+        results = []
+        for und in s.record_underlyings:
+            try:
+                results += await record_underlying(
+                    downloader,
+                    history,
+                    engine.instruments,
+                    und,
+                    start=start,
+                    end=end,
+                    width=s.record_strikes_width,
+                    expiries=s.record_expiries,
+                )
+            except Exception as exc:
+                log.exception("candle recording failed", extra={"underlying": und})
+                await self.notifier.send(f"Candle recording failed for {und}: {exc}", "warning")
+        failed = [f"{r.instrument}: {f}" for r in results for f in r.failed_chunks]
+        candles = sum(r.candles for r in results)
+        await self.notifier.send(
+            f"Recorded {candles} candles for {len(results)} instruments"
+            + (f"; {len(failed)} failures, first: {failed[0]}" if failed else ""),
+            "warning" if failed else "info",
+        )
 
     async def session_expired(self) -> None:
         if self.settings.feed != "kite" or self._stopping:

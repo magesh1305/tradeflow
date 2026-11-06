@@ -5,6 +5,7 @@ modelled: on a holiday the jobs run against an idle market and do nothing harmfu
   09:00  reset daily risk counters (the kill switch is only reset by a human)
   SQUARE_OFF_TIME  MIS square-off (the engine also does this on market time; idempotent)
   15:35  end-of-day summary -> daily_pnl + Telegram
+  15:40  record today's 1-minute candles around ATM (expired contracts can't be fetched later)
   SESSION_EXPIRY_TIME (06:00, every day)  stop the engine; the Kite token is dead
 """
 
@@ -36,6 +37,7 @@ def build_scheduler(runtime: Runtime) -> AsyncIOScheduler:
     sq = s.square_off_time
     sched.add_job(runtime.square_off, weekday(sq.hour, sq.minute), id="square_off", **common)
     sched.add_job(runtime.end_of_day, weekday(15, 35), id="end_of_day", **common)
+    sched.add_job(runtime.record_candles, weekday(15, 40), id="record_candles", **common)
     exp = s.session_expiry_time
     sched.add_job(
         runtime.session_expired,
