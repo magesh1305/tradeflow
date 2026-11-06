@@ -35,6 +35,20 @@ class PaperExecutor:
     def bind(self, listener: ExecutionListener) -> None:
         self._listener = listener
 
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    def adopt(self, order: Order) -> None:
+        """Paper fills don't survive a restart: a restored open paper order is cancelled."""
+        if not order.status.is_terminal:
+            order.status = OrderStatus.CANCELLED
+            order.status_message = "cancelled on restart (paper orders do not survive restarts)"
+            order.updated_at = self._clock.now()
+            self.listener.on_order_update(order)
+
     @property
     def listener(self) -> ExecutionListener:
         if self._listener is None:
