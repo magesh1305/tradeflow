@@ -64,6 +64,15 @@ Live execution and recovery:
 - Startup recovery (`engine/recovery.py`) replays today's fills, carried NRML fills (P&L zeroed) and open orders. Live also compares with `kite.positions()`/`kite.orders()`. Any mismatch, or a recovery that can't run (e.g. DB down), calls `engine.block()`: no strategy can start until `POST /recovery/resolve` (admin, `confirm: "RESOLVE"`).
 - Session expiry (06:00 job, or a TokenException): stop the engine, flush the journal, then SIGTERM self so Docker restarts a fresh process. The Twisted reactor can't restart.
 
+F&O rules:
+- Order path: `prepare_group` (risk check -> option MARKET-to-LIMIT conversion) -> `check_margin` (opening orders only; paper estimate is synchronous, live `KiteMargin` is async and fails closed) -> `send`. Orders waiting for margin are `_unsent`; `cancel_order` handles them.
+- Option entries need a two-sided quote, a spread <= `OPTION_MAX_SPREAD_PCT` and volume >= `OPTION_MIN_VOLUME`. Converted LIMIT orders are re-priced toward the market every `OPTION_CHASE_AFTER_SEC`, at most `OPTION_CHASE_MAX` times (Kite caps modifications at 25).
+- Leg groups (`engine/legs.py`): every leg is risk-checked or none is sent, plus one basket margin check; BUY legs go first. On failure the pending legs are cancelled and filled quantity is unwound, never more than is held. On the kill switch or square-off, groups are ABORTED **before** anything else, so there is no unwind on top of the square-off (double exit).
+- Protective stops (`engine/stops.py`): one SL (stop-limit) order per position, flagged `protective=True` and excluded from pending-exit accounting. Strategy exits release the stop first. A rejected stop alerts and is not retried.
+- Auto-slice children have `tag: null`. `LiveExecutor` maps them via the placement response, and buffers child updates that arrive before it.
+- Expiry: no entries on expiry day after `EXPIRY_NO_ENTRY_AFTER`. Stock (non-index) F&O positions are exited `PHYSICAL_SETTLEMENT_EXIT_DAYS` trading days before expiry at `PHYSICAL_SETTLEMENT_EXIT_TIME`.
+- Greeks use `vollib` (the maintained successor of the deprecated `py_vollib`).
+
 ```
 backend/app/
   config.py    settings, mode switch, safety latches (assert_safe)
