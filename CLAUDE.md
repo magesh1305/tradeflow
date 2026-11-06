@@ -49,6 +49,13 @@ KiteFeed / HistoricalFeed / RandomWalkFeed
   -> Postgres journal + Telegram alerts -> dashboard (REST + WebSocket)
 ```
 
+Engine invariants (keep these when changing the engine):
+- `TradingEngine.submit_order` is the only path to an executor, and it runs `RiskManager.check` **before** recording the order. If the order were recorded first, it would count as its own pending exit and real exits would be blocked.
+- Fills update the `PositionBook` immediately. Strategy callbacks (`on_order`, `on_fill`) are queued and run after the current dispatch (`_pump`), so hooks are never re-entered.
+- Market time comes from tick timestamps. In realtime mode a 1s wall-clock timer also advances it.
+- The scheduled square-off closes **MIS only** (NRML carries). The kill switch and manual square-off close everything, each using the position's own product.
+- Kill switch: stops all strategies, cancels open orders and squares off. Reset keeps strategies stopped.
+
 ```
 backend/app/
   config.py    settings, mode switch, safety latches (assert_safe)
