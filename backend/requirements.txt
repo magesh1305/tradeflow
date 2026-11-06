@@ -12,8 +12,8 @@ alembic==1.20.1
 redis==8.1.0
 httpx==0.28.1
 pyyaml==6.0.3
-py_vollib==1.0.12
-py_lets_be_rational==1.1.2
+# vollib: maintained successor of py_vollib (py_vollib 1.0.12 is a deprecated shim over it)
+vollib==1.0.11
 pandas==3.1.0
 numpy==2.5.4
 scipy==1.18.1

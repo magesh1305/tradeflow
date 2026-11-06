@@ -41,8 +41,6 @@ pandas==3.1.0
 pathspec==1.1.1
 piecewise-rational==1.0.0
 pluggy==1.7.0
-py-vollib==1.0.12
-py_lets_be_rational==1.1.2
 pycparser==3.12
 pydantic==2.14.1
 pydantic-settings==2.16.1
