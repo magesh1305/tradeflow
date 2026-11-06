@@ -1,0 +1,35 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# node
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# local data / runtime
+/data/
+*.log
+backend/strategies.local.yaml
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
