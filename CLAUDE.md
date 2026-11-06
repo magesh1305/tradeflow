@@ -80,6 +80,14 @@ Charges, history, backtests:
 - `factory.build_backtest_engine` always uses PaperExecutor and never journals, whatever `MODE` is. The runner restarts strategies each morning, as the live process does after its daily restart.
 - The daily 15:40 job records 1-minute candles for `RECORD_UNDERLYINGS` (ATM +/- `RECORD_STRIKES_WIDTH`, nearest `RECORD_EXPIRIES`).
 
+Control API (`app/api/`):
+- Everything except `/health` and `/auth/*` needs `X-Admin-Token` (constant-time compare). `/ws?token=` streams the status snapshot every second, and access logs redact the token. `tests/test_api.py` walks every route via OpenAPI and asserts it returns 401 without the token, so **update its count when adding routes**.
+- `/docs` and `/openapi.json` are off unless `API_DOCS=true` (they are unauthenticated).
+- `/orders` and `/fills` merge the journal (history) with live engine state (today); `/pnl/daily` adds today's live row (`live: true`).
+- `PUT /strategies/{id}/params` only works while the strategy is stopped. Changes are validated and saved to `STRATEGY_OVERRIDES_FILE`, so they survive the daily restart.
+- `POST /backtests` returns 202 straight away. The run happens in a separate process (`backtest/job.py`) so it can't delay the live event loop.
+- API response models live in `api/schemas.py`; the frontend types in `frontend/src/api/` mirror them.
+
 ```
 backend/app/
   config.py    settings, mode switch, safety latches (assert_safe)
