@@ -29,6 +29,11 @@ All times are IST (Asia/Kolkata). Prices and P&L are in INR.
 - Order `tag`: alphanumeric, max 20 characters. We use a 16-character client order id.
 - `autoslice=True` slices orders above the freeze quantity, up to 10 slices.
 - Access tokens expire every morning. The daily login flow is `/auth/login` -> Kite -> `/auth/callback`. The token is stored in Redis until the next 06:00 IST.
+- WebSocket (KiteTicker): max 3000 instruments per connection and 3 connections per API key. `full` mode carries LTP, volume, OI, the exchange timestamp and 5-level depth. Order updates arrive as `type: "order"` text frames (`on_order_update`).
+- KiteTicker runs on the Twisted reactor, which **cannot be restarted in a process**. `KiteFeed` starts once per process. After the token expires the engine stops and the container restarts. Calls into the ticker go through `reactor.callFromThread`, and callbacks come back via `loop.call_soon_threadsafe`.
+- `KITE_USER_ID` (optional, recommended): the login callback rejects sessions from any other Kite account.
+- Order placement is never retried automatically: a timeout may mean the order was placed. Reconciliation by tag resolves unknown outcomes.
+- Tests: `tests/conftest.py` makes any real `KiteConnect._request` or `KiteTicker.connect` call fail the test.
 - If you are unsure about a Kite API detail, check https://kite.trade/docs/connect/v3/ instead of guessing.
 
 ## Architecture
