@@ -24,6 +24,9 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for key in list(os.environ):
         if key.upper().startswith(_SETTING_PREFIXES):
             monkeypatch.delenv(key, raising=False)
+    # API tests must not boot the engine / DB / scheduler unless they ask for it.
+    monkeypatch.setenv("ENGINE_AUTOSTART", "false")
+    monkeypatch.setenv("EXIT_ON_SESSION_EXPIRY", "false")
     yield
 
 

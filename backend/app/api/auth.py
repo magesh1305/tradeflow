@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlencode
@@ -22,6 +23,7 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_BACKGROUND: set[asyncio.Task[None]] = set()
 
 
 def _auth(request: Request) -> KiteAuth:
@@ -54,6 +56,12 @@ async def callback(
     except LoginError as exc:
         log.error("kite login failed", extra={"error": str(exc)})
         return _back_to_dashboard(kite_login="failed", reason=str(exc)[:200])
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None:
+        # Start the engine in the background so the browser redirect is immediate.
+        task = asyncio.get_running_loop().create_task(runtime.on_login(session))
+        _BACKGROUND.add(task)
+        task.add_done_callback(_BACKGROUND.discard)
     return _back_to_dashboard(kite_login="success", user_id=session.user_id)
 
 

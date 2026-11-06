@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
 
+    # --- process --------------------------------------------------------------
+    # Start the engine when the API starts (tests turn this off).
+    engine_autostart: bool = True
+    # After the Kite session expires, exit so Docker restarts a fresh process
+    # (the KiteTicker reactor cannot restart in-process).
+    exit_on_session_expiry: bool = True
+
     # --- logging ----------------------------------------------------------------
     log_level: str = "INFO"
     log_json: bool = True

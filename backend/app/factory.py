@@ -5,8 +5,9 @@ Everything else receives already-wired collaborators and never inspects the mode
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession, RedisTokenStore, TokenStore
@@ -14,17 +15,24 @@ from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
 from app.core.ratelimit import RateLimiter
 from app.data.instruments import InstrumentStore
-from app.engine.engine import EngineConfig, TradingEngine
+from app.engine.engine import EngineConfig, OrderJournal, TradingEngine
 from app.engine.positions import PositionBook
 from app.execution.base import Executor
+from app.execution.live import LiveExecutor
 from app.execution.paper import PaperExecutor
 from app.feeds.base import Feed
 from app.feeds.kite import KiteFeed
 from app.feeds.random_walk import RandomWalkFeed, synthetic_nifty
-from app.notify.base import Notifier
+from app.notify.base import LogNotifier, Notifier
+from app.notify.telegram import CompositeNotifier, TelegramNotifier
 from app.risk.manager import RiskLimits, RiskManager
+from app.storage.db import make_engine, make_sessionmaker
+from app.storage.journal import Journal, SqlJournalStore
 from app.strategies.registry import StrategyConfig, discover
 from app.strategies.registry import build as build_strategy
+
+if TYPE_CHECKING:
+    from app.runtime import Runtime
 
 
 def build_kite_client(settings: Settings, access_token: str | None = None) -> Any:
@@ -49,7 +57,11 @@ def build_auth(settings: Settings, store: TokenStore) -> KiteAuth:
     )
 
 
-def build_broker(settings: Settings, session: KiteSession) -> KiteBroker:
+def build_broker(
+    settings: Settings,
+    session: KiteSession,
+    on_session_expired: Callable[[], None] | None = None,
+) -> KiteBroker:
     """Kite REST wrapper. Order endpoints are enabled only in live mode."""
     return KiteBroker(
         build_kite_client(settings, session.access_token),
@@ -58,7 +70,45 @@ def build_broker(settings: Settings, session: KiteSession) -> KiteBroker:
         order_limiter=RateLimiter(
             [(int(settings.order_rate_per_sec), 1.0), (settings.order_rate_per_min, 60.0)]
         ),
+        on_session_expired=on_session_expired,
     )
+
+
+def reconciliation_broker(settings: Settings, broker: KiteBroker | None) -> KiteBroker | None:
+    """Live mode checks recovered state against Kite; paper has no broker state to compare."""
+    return broker if settings.is_live else None
+
+
+async def load_instruments(
+    settings: Settings, broker: KiteBroker | None, today: date
+) -> InstrumentStore:
+    store = InstrumentStore()
+    if settings.feed == "kite":
+        if broker is None:
+            raise RuntimeError("FEED=kite needs a Kite session to load instruments")
+        rows: list[dict[str, Any]] = []
+        for exchange in ("NSE", "NFO"):
+            rows.extend(await broker.instruments(exchange))
+        store.load_kite_rows(rows, today)
+    else:
+        store.load(synthetic_nifty(today).all, today)
+    return store
+
+
+def build_notifier(settings: Settings) -> Notifier:
+    sinks: list[Notifier] = [LogNotifier()]
+    if settings.telegram_enabled:
+        sinks.append(
+            TelegramNotifier(
+                settings.telegram_bot_token.get_secret_value(), settings.telegram_chat_id
+            )
+        )
+    return CompositeNotifier(*sinks, prefix="[LIVE] " if settings.is_live else "[PAPER] ")
+
+
+def build_journal(settings: Settings, notifier: Notifier) -> Journal:
+    sessions = make_sessionmaker(make_engine(settings.database_url))
+    return Journal(SqlJournalStore(sessions), settings.mode, notifier)
 
 
 def build_feed(settings: Settings, session: KiteSession | None, today: date) -> Feed:
@@ -69,9 +119,12 @@ def build_feed(settings: Settings, session: KiteSession | None, today: date) -> 
     return RandomWalkFeed(synthetic_nifty(today))
 
 
-def build_executor(settings: Settings, clock: Clock) -> Executor:
+def build_executor(settings: Settings, clock: Clock, broker: KiteBroker | None) -> Executor:
     if settings.is_live:
-        raise NotImplementedError("LiveExecutor arrives in Phase 4; live trading is unavailable")
+        settings.assert_safe()  # belt and braces: never build a live executor unsafely
+        if broker is None or not broker.orders_enabled:
+            raise RuntimeError("live mode needs a Kite session with order endpoints enabled")
+        return LiveExecutor(broker, clock)
     return PaperExecutor(clock, slippage_ticks=settings.paper_slippage_ticks)
 
 
@@ -84,6 +137,8 @@ def build_engine(
     notifier: Notifier,
     strategy_configs: list[StrategyConfig],
     realtime: bool,
+    broker: KiteBroker | None = None,
+    journal: OrderJournal | None = None,
 ) -> tuple[TradingEngine, list[str]]:
     """Wire the engine. Returns the engine and the ids of strategies enabled at start."""
     positions = PositionBook()
@@ -91,7 +146,7 @@ def build_engine(
     engine = TradingEngine(
         instruments=instruments,
         feed=feed,
-        executor=build_executor(settings, clock),
+        executor=build_executor(settings, clock, broker),
         risk=risk,
         positions=positions,
         clock=clock,
@@ -100,8 +155,30 @@ def build_engine(
             square_off_time=settings.square_off_time, market_open=settings.market_open
         ),
         wall_clock=SystemClock() if realtime else None,
+        journal=journal,
     )
     discover()
     for cfg in strategy_configs:
         engine.add_strategy(build_strategy(cfg))
     return engine, [c.id for c in strategy_configs if c.enabled]
+
+
+def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
+    import os  # noqa: PLC0415
+    import signal  # noqa: PLC0415
+
+    from app.runtime import Runtime  # noqa: PLC0415 - runtime imports factory
+
+    notifier = build_notifier(settings)
+
+    def exit_process() -> None:
+        # Let uvicorn shut down gracefully; Docker's restart policy brings us back.
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    return Runtime(
+        settings,
+        notifier=notifier,
+        journal=build_journal(settings, notifier),
+        auth=auth,
+        exit_process=exit_process if settings.exit_on_session_expiry else None,
+    )

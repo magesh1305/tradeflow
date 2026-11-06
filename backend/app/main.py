@@ -1,5 +1,5 @@
-"""FastAPI application: startup safety check, health and Kite login routes.
-The control API, engine wiring and scheduler arrive in later phases."""
+"""FastAPI application: startup safety check, runtime (engine, journal, scheduler),
+health, Kite login and recovery routes. The full control API arrives in Phase 7."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import factory
-from app.api import auth
+from app.api import auth, recovery
 from app.config import get_settings
 from app.core.clock import now_ist
 from app.core.logging import configure_logging
@@ -26,13 +26,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Tests may pre-install app.state.auth with mocks; don't overwrite it.
     if getattr(app.state, "auth", None) is None and settings.kite_api_key:
         app.state.auth = factory.build_auth(settings, factory.build_token_store(settings))
-    log.info("tradeflow starting", extra={"mode": settings.mode, "feed": settings.feed})
-    yield
-    log.info("tradeflow stopped")
+    runtime = None
+    if settings.engine_autostart:
+        runtime = factory.build_runtime(settings, getattr(app.state, "auth", None))
+        app.state.runtime = runtime
+        await runtime.startup()
+    log.info("tradeflow started", extra={"mode": settings.mode, "feed": settings.feed})
+    try:
+        yield
+    finally:
+        if runtime is not None:
+            await runtime.shutdown()
+            app.state.runtime = None
+        log.info("tradeflow stopped")
 
 
 app = FastAPI(title="tradeflow", lifespan=lifespan)
 app.include_router(auth.router)
+app.include_router(recovery.router)
 
 
 @app.get("/health")
