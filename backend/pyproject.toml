@@ -21,6 +21,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106", "PLR2004", "DTZ001"]  # SDK payloads use naive IST datetimes
 "app/storage/migrations/**" = ["E501"]
+"app/api/**" = ["PLR0917"]  # FastAPI endpoints take query params positionally
 
 [tool.mypy]
 python_version = "3.12"
