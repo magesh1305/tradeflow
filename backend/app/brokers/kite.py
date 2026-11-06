@@ -34,16 +34,39 @@ VALIDITY_DAY = "DAY"
 NEEDS_MARKET_PROTECTION = frozenset({OrderType.MARKET, OrderType.SL_M})
 
 
+# Kite exception types that mean the request was definitely refused. Anything else
+# (NetworkException, GeneralException/5xx, timeouts, connection errors) leaves the
+# outcome unknown: an order may or may not have been placed.
+DEFINITE_FAILURES = frozenset(
+    {"InputException", "OrderException", "PermissionException", "TokenException", "OrdersDisabled"}
+)
+
+
 class BrokerError(RuntimeError):
-    """Any failure reported by Kite or the network."""
+    """Any failure reported by Kite or the network. `kind` is the original exception name."""
+
+    def __init__(self, message: str, kind: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+    @property
+    def outcome_unknown(self) -> bool:
+        """True when the request may have reached Kite (never retry; reconcile instead)."""
+        return self.kind not in DEFINITE_FAILURES
 
 
 class OrdersDisabledError(BrokerError):
     """Order endpoint called while orders are disabled (paper mode)."""
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message, "OrdersDisabled")
+
 
 class SessionExpiredError(BrokerError):
     """Kite rejected the access token (expired or logged out)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, "TokenException")
 
 
 def _is_token_error(exc: Exception) -> bool:
@@ -84,7 +107,8 @@ class KiteBroker:
                 if self._on_session_expired:
                     self._on_session_expired()
                 raise SessionExpiredError(str(exc)) from exc
-            raise BrokerError(f"{type(exc).__name__}: {exc}") from exc
+            kind = type(exc).__name__
+            raise BrokerError(f"{kind}: {exc}", kind) from exc
 
     def _require_orders(self) -> None:
         if not self._orders_enabled:
