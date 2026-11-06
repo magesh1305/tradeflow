@@ -37,6 +37,25 @@ class Record:
     data: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class ReportFilter:
+    """Read-side filter for the control API (dates are trading dates, inclusive)."""
+
+    start: date
+    end: date
+    mode: str
+    strategy_id: str | None = None
+    limit: int = 1000
+
+
+def _match(row: dict[str, Any], f: ReportFilter) -> bool:
+    return (
+        f.start <= row["trading_date"] <= f.end
+        and row["mode"] == f.mode
+        and (f.strategy_id is None or row["strategy_id"] == f.strategy_id)
+    )
+
+
 def order_row(order: Order, mode: str) -> dict[str, Any]:
     req = order.request
     inst = req.instrument
@@ -94,6 +113,9 @@ class JournalStore(Protocol):
     async def load_open_orders(self, mode: str, trading_date: date) -> list[dict[str, Any]]: ...
     async def load_order_ids(self, mode: str, trading_date: date) -> set[str]: ...
     async def upsert_daily_pnl(self, rows: list[dict[str, Any]]) -> None: ...
+    async def query_orders(self, f: ReportFilter) -> list[dict[str, Any]]: ...
+    async def query_fills(self, f: ReportFilter) -> list[dict[str, Any]]: ...
+    async def query_daily_pnl(self, f: ReportFilter) -> list[dict[str, Any]]: ...
 
 
 _TERMINAL = ("COMPLETE", "CANCELLED", "REJECTED")
@@ -190,6 +212,24 @@ class SqlJournalStore:
                         set_={k: stmt.excluded[k] for k in row if k not in keys},
                     )
                 )
+
+    async def _query(self, table: Any, f: ReportFilter, order_col: str) -> list[dict[str, Any]]:
+        t = table.__table__
+        stmt = select(t).where(
+            t.c.trading_date >= f.start, t.c.trading_date <= f.end, t.c.mode == f.mode
+        )
+        if f.strategy_id is not None:
+            stmt = stmt.where(t.c.strategy_id == f.strategy_id)
+        return await self._rows(stmt.order_by(t.c[order_col].desc()).limit(f.limit))
+
+    async def query_orders(self, f: ReportFilter) -> list[dict[str, Any]]:
+        return await self._query(OrderRow, f, "created_at")
+
+    async def query_fills(self, f: ReportFilter) -> list[dict[str, Any]]:
+        return await self._query(FillRow, f, "ts")
+
+    async def query_daily_pnl(self, f: ReportFilter) -> list[dict[str, Any]]:
+        return await self._query(DailyPnlRow, f, "trading_date")
 
 
 class Journal:
@@ -361,6 +401,18 @@ class MemoryJournalStore:
     async def upsert_daily_pnl(self, rows: list[dict[str, Any]]) -> None:
         for r in rows:
             self.daily_pnl[(r["trading_date"], r["mode"], r["strategy_id"])] = dict(r)
+
+    async def query_orders(self, f: ReportFilter) -> list[dict[str, Any]]:
+        rows = [o for o in self.orders.values() if _match(o, f)]
+        return sorted(rows, key=lambda r: r["created_at"], reverse=True)[: f.limit]
+
+    async def query_fills(self, f: ReportFilter) -> list[dict[str, Any]]:
+        rows = [r for r in self.fills.values() if _match(r, f)]
+        return sorted(rows, key=lambda r: r["ts"], reverse=True)[: f.limit]
+
+    async def query_daily_pnl(self, f: ReportFilter) -> list[dict[str, Any]]:
+        rows = [r for r in self.daily_pnl.values() if _match(r, f)]
+        return sorted(rows, key=lambda r: r["trading_date"], reverse=True)[: f.limit]
 
 
 def daily_pnl_rows(
