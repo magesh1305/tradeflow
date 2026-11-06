@@ -156,3 +156,22 @@ class LegGroupRow(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime]
     updated_at: Mapped[datetime]
+
+
+class InstrumentRow(Base):
+    """Instrument master history. Kite reuses tokens after expiry and drops expired
+    contracts from its dump, so backtests need the contract as it was on each day."""
+
+    __tablename__ = "instruments"
+
+    exchange: Mapped[str] = mapped_column(String(8), primary_key=True)
+    tradingsymbol: Mapped[str] = mapped_column(String(64), primary_key=True)
+    instrument_token: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    instrument_type: Mapped[str] = mapped_column(String(8))
+    lot_size: Mapped[int] = mapped_column(Integer)
+    tick_size: Mapped[float] = mapped_column(Float)
+    expiry: Mapped[date | None] = mapped_column(Date)
+    strike: Mapped[float | None] = mapped_column(Float)
+    first_seen: Mapped[date] = mapped_column(Date)
+    last_seen: Mapped[date] = mapped_column(Date)
