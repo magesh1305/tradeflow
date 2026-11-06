@@ -1,0 +1,23 @@
+# Strategy instances. One strategy class can run several times with different params.
+# `enabled: true` starts the instance when the engine starts.
+strategies:
+  - id: ema_nifty_5m
+    strategy: ema_crossover
+    enabled: true
+    params:
+      underlying: NIFTY
+      interval_minutes: 5
+      fast: 9
+      slow: 21
+      lots: 1
+
+  # Short options carry unlimited risk. Enable only after paper-trading it.
+  - id: straddle_nifty
+    strategy: short_straddle
+    enabled: false
+    params:
+      underlying: NIFTY
+      entry_time: "09:20"
+      exit_time: "15:00"
+      lots: 1
+      stop_loss_pct: 30
