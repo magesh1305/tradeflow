@@ -1,0 +1,45 @@
+[project]
+name = "tradeflow"
+version = "0.1.0"
+description = "Algorithmic F&O trading platform for Zerodha Kite Connect"
+requires-python = ">=3.12,<3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "DTZ", "SIM", "RUF", "PL"]
+ignore = [
+    "PLR0913",  # strategies/brokers legitimately take many params
+    "PLR2004",  # magic numbers are common in trading math
+    "PLR0911",
+    "PLR0912",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "PLR2004"]
+"app/storage/migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["^\\.venv/", "^app/storage/migrations/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["kiteconnect.*", "py_vollib.*", "apscheduler.*", "scipy.*", "pandas.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: needs live Postgres/Redis (skipped if unreachable)"]
+filterwarnings = [
+    "error::RuntimeWarning",
+    # Starlette 1.x suggests httpx2 for TestClient; httpx is the pinned, approved client.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

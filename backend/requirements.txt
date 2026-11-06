@@ -1,0 +1,20 @@
+# Runtime dependencies. Exact pins; each version was at least 14 days old when pinned.
+# Transitive pins live in constraints.txt (install with: -r requirements.txt -c constraints.txt).
+fastapi==0.161.1
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
+kiteconnect==5.2.2
+apscheduler==3.11.3
+sqlalchemy[asyncio]==2.1.6
+asyncpg==0.32.0
+alembic==1.20.1
+redis==8.1.0
+httpx==0.28.1
+pyyaml==6.0.3
+py_vollib==1.0.12
+py_lets_be_rational==1.1.2
+pandas==3.1.0
+numpy==2.5.4
+scipy==1.18.1
+tzdata==2026.5
