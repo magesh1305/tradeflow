@@ -11,10 +11,20 @@ from typing import Any
 from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession, RedisTokenStore, TokenStore
 from app.config import Settings
+from app.core.clock import Clock, ManualClock, SystemClock
 from app.core.ratelimit import RateLimiter
+from app.data.instruments import InstrumentStore
+from app.engine.engine import EngineConfig, TradingEngine
+from app.engine.positions import PositionBook
+from app.execution.base import Executor
+from app.execution.paper import PaperExecutor
 from app.feeds.base import Feed
 from app.feeds.kite import KiteFeed
 from app.feeds.random_walk import RandomWalkFeed, synthetic_nifty
+from app.notify.base import Notifier
+from app.risk.manager import RiskLimits, RiskManager
+from app.strategies.registry import StrategyConfig, discover
+from app.strategies.registry import build as build_strategy
 
 
 def build_kite_client(settings: Settings, access_token: str | None = None) -> Any:
@@ -57,3 +67,41 @@ def build_feed(settings: Settings, session: KiteSession | None, today: date) -> 
             raise RuntimeError("FEED=kite needs a valid Kite session; log in via /auth/login")
         return KiteFeed(settings.kite_api_key, session.access_token)
     return RandomWalkFeed(synthetic_nifty(today))
+
+
+def build_executor(settings: Settings, clock: Clock) -> Executor:
+    if settings.is_live:
+        raise NotImplementedError("LiveExecutor arrives in Phase 4; live trading is unavailable")
+    return PaperExecutor(clock, slippage_ticks=settings.paper_slippage_ticks)
+
+
+def build_engine(
+    settings: Settings,
+    *,
+    instruments: InstrumentStore,
+    feed: Feed,
+    clock: ManualClock,
+    notifier: Notifier,
+    strategy_configs: list[StrategyConfig],
+    realtime: bool,
+) -> tuple[TradingEngine, list[str]]:
+    """Wire the engine. Returns the engine and the ids of strategies enabled at start."""
+    positions = PositionBook()
+    risk = RiskManager(RiskLimits.from_settings(settings), positions, clock)
+    engine = TradingEngine(
+        instruments=instruments,
+        feed=feed,
+        executor=build_executor(settings, clock),
+        risk=risk,
+        positions=positions,
+        clock=clock,
+        notifier=notifier,
+        config=EngineConfig(
+            square_off_time=settings.square_off_time, market_open=settings.market_open
+        ),
+        wall_clock=SystemClock() if realtime else None,
+    )
+    discover()
+    for cfg in strategy_configs:
+        engine.add_strategy(build_strategy(cfg))
+    return engine, [c.id for c in strategy_configs if c.enabled]

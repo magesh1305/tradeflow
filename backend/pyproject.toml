@@ -43,3 +43,9 @@ filterwarnings = [
     # Starlette 1.x suggests httpx2 for TestClient; httpx is the pinned, approved client.
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
 ]
+
+[[tool.mypy.overrides]]
+# Tests assert state, mutate it through a call, then assert again; mypy's
+# literal narrowing does not see the mutation.
+module = ["tests.*"]
+disable_error_code = ["comparison-overlap"]
