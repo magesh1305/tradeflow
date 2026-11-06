@@ -125,6 +125,41 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_chat_id: str = ""
 
+    # --- charges (Zerodha NSE F&O) ----------------------------------------------
+    # THESE RATES CHANGE. Taken from zerodha.com/charges on 2026-11-07, which gives
+    # no effective dates. Verify them before trusting any net P&L figure.
+    brokerage_per_order: float = 20.0  # flat, per executed order
+    brokerage_futures_pct: float = 0.03  # futures: lower of this % or the flat fee
+    stt_futures_sell_pct: float = 0.05
+    stt_options_sell_pct: float = 0.15  # on premium
+    exchange_txn_futures_pct: float = 0.00183
+    exchange_txn_options_pct: float = 0.03553  # on premium
+    sebi_fee_per_crore: float = 10.0
+    ipft_per_crore: float = 0.01
+    stamp_futures_buy_pct: float = 0.002
+    stamp_options_buy_pct: float = 0.003
+    gst_pct: float = 18.0  # on brokerage + exchange txn + SEBI (+ IPFT)
+
+    # --- historical data ----------------------------------------------------------
+    # Days per Kite historical request, by interval. The Kite docs don't state these
+    # limits (checked); these are the commonly reported values. Verify them.
+    history_chunk_days: dict[str, int] = Field(
+        default_factory=lambda: {
+            "minute": 60,
+            "3minute": 100,
+            "5minute": 100,
+            "10minute": 100,
+            "15minute": 200,
+            "30minute": 200,
+            "60minute": 400,
+            "day": 2000,
+        }
+    )
+    # Daily recording of 1-minute candles (expired contracts can't be fetched later).
+    record_underlyings: list[str] = Field(default_factory=lambda: ["NIFTY", "BANKNIFTY"])
+    record_strikes_width: int = Field(default=10, ge=1, le=50)  # strikes either side of ATM
+    record_expiries: int = Field(default=2, ge=1, le=6)
+
     # --- process --------------------------------------------------------------
     # Start the engine when the API starts (tests turn this off).
     engine_autostart: bool = True
