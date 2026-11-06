@@ -15,7 +15,9 @@ from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
 from app.core.models import Tick
 from app.core.ratelimit import RateLimiter
+from app.data.historical import SqlHistoryStore
 from app.data.instruments import InstrumentStore
+from app.engine.charges import FnoCharges
 from app.engine.engine import EngineConfig, OrderJournal, TradingEngine
 from app.engine.positions import PositionBook
 from app.engine.smart_orders import OptionOrderRules
@@ -204,6 +206,7 @@ def build_engine(
         wall_clock=SystemClock() if realtime else None,
         journal=journal,
         margin=build_margin_checker(settings, broker, positions, clock_quote),
+        charges=FnoCharges.from_settings(settings),
     )
     clock_quote.engine = engine
     discover()
@@ -230,4 +233,45 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
         journal=build_journal(settings, notifier),
         auth=auth,
         exit_process=exit_process if settings.exit_on_session_expiry else None,
+        history=build_history_store(settings),
     )
+
+
+def build_backtest_engine(
+    settings: Settings,
+    *,
+    instruments: InstrumentStore,
+    feed: Feed,
+    clock: ManualClock,
+    notifier: Notifier,
+    strategy_configs: list[StrategyConfig],
+) -> TradingEngine:
+    """Backtests ALWAYS use PaperExecutor and the paper margin estimate, whatever MODE
+    says, and never journal (backtest trades must not mix with real orders)."""
+    positions = PositionBook()
+    quote = _QuoteProxy()
+    engine = TradingEngine(
+        instruments=instruments,
+        feed=feed,
+        executor=PaperExecutor(clock, slippage_ticks=settings.paper_slippage_ticks),
+        risk=RiskManager(RiskLimits.from_settings(settings), positions, clock),
+        positions=positions,
+        clock=clock,
+        notifier=notifier,
+        config=engine_config(settings),
+        margin=(
+            EstimatedMargin(settings.paper_capital, settings.paper_margin_pct, quote)
+            if settings.margin_check_enabled
+            else None
+        ),
+        charges=FnoCharges.from_settings(settings),
+    )
+    quote.engine = engine
+    discover()
+    for cfg in strategy_configs:
+        engine.add_strategy(build_strategy(cfg))
+    return engine
+
+
+def build_history_store(settings: Settings) -> SqlHistoryStore:
+    return SqlHistoryStore(make_sessionmaker(make_engine(settings.database_url)))
