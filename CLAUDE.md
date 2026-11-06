@@ -73,6 +73,13 @@ F&O rules:
 - Expiry: no entries on expiry day after `EXPIRY_NO_ENTRY_AFTER`. Stock (non-index) F&O positions are exited `PHYSICAL_SETTLEMENT_EXIT_DAYS` trading days before expiry at `PHYSICAL_SETTLEMENT_EXIT_TIME`.
 - Greeks use `vollib` (the maintained successor of the deprecated `py_vollib`).
 
+Charges, history, backtests:
+- `engine/charges.py` charges every fill (rates in config; **they change**, so verify them at zerodha.com/charges). Brokerage is charged once per order across partial fills. Positions carry charges, so `net` = gross - charges everywhere, including the daily-loss kill switch.
+- Kite reuses instrument tokens after expiry and drops expired contracts from its dump. The `instruments` table (migration 0002) keeps contract history with `first_seen`; backtests load only the contracts live on each day.
+- `HistoricalFeed` replays each candle as 4 ticks: O, then L/H (low first on up candles), then C. Mid-day subscriptions load on demand, with day volume counted from the open. Gaps go into `missing`, and days with no data at all are reported as non-trading days.
+- `factory.build_backtest_engine` always uses PaperExecutor and never journals, whatever `MODE` is. The runner restarts strategies each morning, as the live process does after its daily restart.
+- The daily 15:40 job records 1-minute candles for `RECORD_UNDERLYINGS` (ATM +/- `RECORD_STRIKES_WIDTH`, nearest `RECORD_EXPIRIES`).
+
 ```
 backend/app/
   config.py    settings, mode switch, safety latches (assert_safe)
@@ -104,8 +111,8 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 ruff check . && ruff format --check .
 mypy app
 pytest
-python -m app.cli download-history ...
-python -m app.cli backtest ...
+python -m app.cli download-history --underlying NIFTY --from 2026-09-01 --to 2026-10-31
+python -m app.cli backtest --strategy ema_crossover --params '{"fast": 9, "slow": 21}' --from 2026-09-01 --to 2026-10-31
 uvicorn app.main:app --reload
 
 # frontend (from frontend/)
