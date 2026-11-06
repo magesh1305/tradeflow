@@ -79,6 +79,47 @@ class Settings(BaseSettings):
 
     # --- paper trading ----------------------------------------------------------
     paper_slippage_ticks: int = Field(default=1, ge=0)
+    # Paper margin estimate: capital and margin as a fraction of notional for futures
+    # and short options (long options block their premium).
+    paper_capital: float = Field(default=1_000_000.0, gt=0)
+    paper_margin_pct: float = Field(default=0.15, gt=0, le=1)
+
+    # --- F&O ----------------------------------------------------------------------
+    # Pre-trade margin check for opening orders and leg groups.
+    margin_check_enabled: bool = True
+    # Exchange freeze quantity (units) per underlying. THESE CHANGE: verify on NSE
+    # before going live. Orders above the limit are auto-sliced by Kite (max 10 slices).
+    freeze_limits: dict[str, int] = Field(
+        default_factory=lambda: {
+            "NIFTY": 1800,
+            "BANKNIFTY": 900,
+            "FINNIFTY": 1800,
+            "MIDCPNIFTY": 2800,
+        }
+    )
+    # Index underlyings are cash-settled; everything else (stock F&O) is physically settled.
+    index_underlyings: list[str] = Field(
+        default_factory=lambda: ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"]
+    )
+    risk_free_rate: float = Field(default=0.065, ge=0, le=0.5)
+    # Options: MARKET requests become LIMIT orders priced from bid/ask plus a buffer,
+    # then re-priced toward the market if still open after `option_chase_after_sec`.
+    option_limit_orders: bool = True
+    option_limit_buffer_ticks: int = Field(default=2, ge=0)
+    option_exit_buffer_pct: float = Field(default=2.0, ge=0, le=20)
+    option_chase_after_sec: float = Field(default=5.0, gt=0)
+    option_chase_max: int = Field(default=10, ge=0, le=24)  # Kite allows 25 modifications
+    # Reject option entries whose spread or day volume is outside these limits.
+    option_max_spread_pct: float = Field(default=5.0, gt=0)
+    option_min_volume: int = Field(default=10_000, ge=0)
+    # Exchange-side stop orders are SL (stop-limit) with this limit buffer beyond the trigger.
+    stop_limit_buffer_pct: float = Field(default=5.0, gt=0, le=50)
+    # Expiry handling.
+    expiry_no_entry_after: time = time(14, 30)
+    physical_settlement_exit_days: int = Field(default=1, ge=0, le=5)  # trading days before
+    physical_settlement_exit_time: time = time(15, 0)
+    # Multi-leg orders: unwind if not fully filled within this time.
+    leg_group_timeout_sec: float = Field(default=30.0, gt=0)
 
     # --- Telegram ---------------------------------------------------------------
     telegram_bot_token: SecretStr = SecretStr("")

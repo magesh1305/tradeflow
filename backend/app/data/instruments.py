@@ -10,7 +10,7 @@ import bisect
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from app.core.models import Exchange, Instrument, InstrumentType
@@ -188,6 +188,36 @@ class InstrumentStore:
             raise InstrumentNotFoundError(f"{underlying} {expiry} {strike} {option_type}")
         return inst
 
+    def next_contract(self, inst: Instrument) -> Instrument:
+        """Same contract in the next expiry (roll target): next future, or same strike/type."""
+        if inst.expiry is None:
+            raise InstrumentNotFoundError(f"{inst.key} does not expire")
+        if inst.instrument_type is InstrumentType.FUT:
+            for fut in self._futures.get(inst.name, []):
+                if fut.expiry and fut.expiry > inst.expiry:
+                    return fut
+            raise InstrumentNotFoundError(f"no future after {inst.key}")
+        if inst.strike is None:
+            raise InstrumentNotFoundError(f"{inst.key} has no strike")
+        for exp in self.expiries(inst.name, "OPT"):
+            if exp > inst.expiry:
+                return self.option(inst.name, exp, inst.strike, inst.instrument_type.value)  # type: ignore[arg-type]
+        raise InstrumentNotFoundError(f"no expiry after {inst.key}")
+
     def options(self, underlying: str, expiry: date) -> list[Instrument]:
         chain = self._options.get(underlying, {}).get(expiry, {})
         return sorted(chain.values(), key=lambda i: (i.strike or 0.0, i.instrument_type))
+
+
+def weekdays_until(today: date, expiry: date) -> int:
+    """Trading days from `today` to `expiry` counting weekdays only (0 on expiry day).
+    Exchange holidays are not modelled."""
+    if expiry <= today:
+        return 0
+    days = 0
+    d = today
+    while d < expiry:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            days += 1
+    return days

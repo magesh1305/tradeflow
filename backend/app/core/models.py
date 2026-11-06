@@ -143,6 +143,9 @@ class OrderRequest:
     leg_group_id: str | None = None
     reason: str = ""
     client_order_id: str = field(default_factory=new_client_order_id)
+    # Exchange-side protective stop. Not counted as a pending exit, so a strategy's
+    # own exit is never blocked by the stop resting at the broker.
+    protective: bool = False
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
