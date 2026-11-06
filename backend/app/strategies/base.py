@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import date, datetime
-from typing import Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -31,6 +31,10 @@ from app.core.models import (
 )
 from app.data.instruments import InstrumentStore
 from app.engine.positions import Position
+
+if TYPE_CHECKING:
+    from app.data.option_chain import OptionChainService
+    from app.engine.legs import LegGroup, LegSpec
 
 
 class StrategyContext(Protocol):
@@ -49,6 +53,13 @@ class StrategyContext(Protocol):
     def subscribe_candles(self, token: int, interval_seconds: int) -> None: ...
     def submit(self, req: OrderRequest) -> Order: ...
     def cancel(self, client_order_id: str) -> None: ...
+    @property
+    def option_chain(self) -> OptionChainService: ...
+    def place_legs(
+        self, specs: list[LegSpec], product: Product, timeout_sec: float | None = None
+    ) -> LegGroup: ...
+    def protect(self, instrument: Instrument, stop_price: float, product: Product) -> None: ...
+    def unprotect(self, instrument: Instrument) -> None: ...
 
 
 class NoParams(BaseModel):
@@ -85,6 +96,7 @@ class Strategy:
     def on_candle(self, candle: Candle) -> None: ...
     def on_order(self, order: Order) -> None: ...
     def on_fill(self, fill: Fill) -> None: ...
+    def on_legs(self, group: LegGroup) -> None: ...
     def on_stop(self) -> None: ...
 
     # --- helpers ---------------------------------------------------------------------
@@ -134,7 +146,9 @@ class Strategy:
 
     def exit_position(self, instrument: Instrument, reason: str = "exit") -> list[Order]:
         """Flatten this strategy's position in `instrument`, keeping each product.
-        Quantity already covered by pending exit orders is not exited twice."""
+        Releases the exchange-side stop first so it can't race the exit. Quantity
+        already covered by pending exit orders is not exited twice."""
+        self.ctx.unprotect(instrument)
         orders: list[Order] = []
         pending = self.ctx.open_orders()
         for pos in self.ctx.positions():
@@ -147,6 +161,7 @@ class Strategy:
                 if o.request.instrument.token == instrument.token
                 and o.request.product == pos.product
                 and o.request.side == side
+                and not o.request.protective
             )
             qty = abs(pos.quantity) - in_flight
             if qty > 0:
@@ -154,6 +169,68 @@ class Strategy:
                     self._order(side, pos.instrument, qty, product=pos.product, reason=reason)
                 )
         return orders
+
+    # --- F&O helpers ------------------------------------------------------------------
+
+    def place_legs(
+        self, *specs: LegSpec, product: Product | None = None, timeout_sec: float | None = None
+    ) -> LegGroup:
+        """Place several legs as one group: all fill, or the filled ones are unwound."""
+        return self.ctx.place_legs(list(specs), product or self.product, timeout_sec)
+
+    def protect(
+        self, instrument: Instrument, stop_price: float, product: Product | None = None
+    ) -> None:
+        """Keep an exchange-side SL order for this position at `stop_price` (call again
+        to trail). Keep your in-code stop too: this is the second layer."""
+        self.ctx.protect(instrument, stop_price, product or self.product)
+
+    def atm(self, underlying: str, expiry: date | None = None) -> float:
+        return self.ctx.option_chain.atm(underlying, expiry)
+
+    def select_by_delta(
+        self,
+        underlying: str,
+        option_type: Literal["CE", "PE"],
+        delta: float,
+        expiry: date | None = None,
+    ) -> Instrument:
+        return self.ctx.option_chain.select_by_delta(underlying, option_type, delta, expiry)
+
+    def select_by_premium(
+        self,
+        underlying: str,
+        option_type: Literal["CE", "PE"],
+        premium: float,
+        expiry: date | None = None,
+    ) -> Instrument:
+        return self.ctx.option_chain.select_by_premium(underlying, option_type, premium, expiry)
+
+    def subscribe_chain(self, underlying: str, expiry: date | None = None, width: int = 10) -> None:
+        """Subscribe `width` strikes either side of ATM (calls and puts)."""
+        self.ctx.subscribe(self.ctx.option_chain.tokens_around_atm(underlying, expiry, width))
+
+    def roll(self, instrument: Instrument, reason: str = "roll") -> LegGroup | None:
+        """Move this strategy's position in `instrument` to the next expiry, as one leg
+        group (exit current + enter next, same size). Rolled positions are NRML."""
+        from app.core.models import Side  # noqa: PLC0415
+        from app.engine.legs import LegSpec  # noqa: PLC0415
+
+        target = self.ctx.instruments.next_contract(instrument)
+        specs: list[LegSpec] = []
+        for pos in self.ctx.positions():
+            if pos.instrument.token != instrument.token or pos.quantity == 0:
+                continue
+            side = Side.BUY if pos.quantity > 0 else Side.SELL
+            specs.append(LegSpec(instrument, side.opposite, abs(pos.quantity), product=pos.product))
+            specs.append(LegSpec(target, side, abs(pos.quantity), product=Product.NRML))
+        if not specs:
+            return None
+        self.ctx.unprotect(instrument)
+        self.ctx.log.info(
+            "rolling %s -> %s (%s)", instrument.tradingsymbol, target.tradingsymbol, reason
+        )
+        return self.place_legs(*specs, product=Product.NRML)
 
     def exit_all(self, reason: str = "exit all") -> list[Order]:
         orders: list[Order] = []

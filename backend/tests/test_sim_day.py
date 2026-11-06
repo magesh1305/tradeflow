@@ -94,12 +94,24 @@ async def test_short_straddle_full_day_ends_flat_via_time_exit() -> None:
     engine, _ = await run_day([cfg("straddle", "short_straddle")], seed=3)
     assert_flat_and_clean(engine)
     orders = [o for o in engine.orders.values() if o.request.strategy_id == "straddle"]
-    entries = [o for o in orders if o.request.reason == "straddle entry"]
-    assert len(entries) == 2
+    entries = [o for o in orders if o.request.leg_group_id]
+    assert len(entries) == 2  # one leg group: call + put
+    assert len({o.request.leg_group_id for o in entries}) == 1
+    (group,) = engine.legs.groups.values()
+    assert group.status.value == "FILLED"
     assert {o.request.instrument.instrument_type for o in entries} == {"CE", "PE"}
     assert all(o.status is OrderStatus.COMPLETE for o in entries)
     assert {o.request.instrument.strike for o in entries} == {entries[0].request.instrument.strike}
     assert entries[0].created_at.time() >= time(9, 20)
+    # Option MARKET requests went out as LIMIT orders priced from the quote.
+    assert all(o.request.order_type == "LIMIT" for o in entries)
+    # Each filled leg got an exchange-side SL order, cancelled again at the time exit.
+    stops = [o for o in orders if o.request.protective]
+    assert {o.request.instrument.token for o in stops} == {
+        o.request.instrument.token for o in entries
+    }
+    assert all(o.request.order_type == "SL" and o.request.side == "BUY" for o in stops)
+    assert all(o.status.is_terminal for o in stops)
 
 
 async def test_both_strategies_square_off_flattens_everything() -> None:

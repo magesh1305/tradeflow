@@ -236,7 +236,10 @@ class RandomWalkFeed:
         ltp = self.price_of(inst, ts)
         if inst.instrument_type is InstrumentType.INDEX:
             return Tick(token=inst.token, ts=ts, ltp=ltp)
-        vol = self._volume.get(inst.token, 0) + self._rng.randint(1, 20) * inst.lot_size
+        # Start from a realistic day volume so liquidity rules see a traded contract.
+        vol = self._volume.get(inst.token, 2_000 * inst.lot_size) + (
+            self._rng.randint(1, 20) * inst.lot_size
+        )
         self._volume[inst.token] = vol
         spread_ticks = 1 if inst.instrument_type is InstrumentType.FUT else 2
         half = inst.tick_size * spread_ticks
