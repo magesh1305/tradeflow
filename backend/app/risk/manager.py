@@ -14,12 +14,12 @@ from __future__ import annotations
 import logging
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 from app.config import Settings
 from app.core.clock import Clock
-from app.core.models import Order, OrderRequest
+from app.core.models import Order, OrderRequest, Tick
 from app.engine.positions import PositionBook
 
 log = logging.getLogger(__name__)
@@ -34,6 +34,11 @@ class RiskLimits:
     duplicate_window_sec: float = 2.0
     trading_start: time = time(9, 15)
     trading_end: time = time(15, 10)
+    expiry_no_entry_after: time = time(14, 30)
+    option_max_spread_pct: float = 5.0
+    option_min_volume: int = 0
+    freeze_limits: dict[str, int] = field(default_factory=dict)
+    max_slices: int = 10  # Kite auto-slice limit
 
     @classmethod
     def from_settings(cls, s: Settings) -> RiskLimits:
@@ -45,6 +50,10 @@ class RiskLimits:
             duplicate_window_sec=s.duplicate_order_window_sec,
             trading_start=s.trading_start,
             trading_end=s.trading_end,
+            expiry_no_entry_after=s.expiry_no_entry_after,
+            option_max_spread_pct=s.option_max_spread_pct,
+            option_min_volume=s.option_min_volume,
+            freeze_limits=dict(s.freeze_limits),
         )
 
 
@@ -97,16 +106,19 @@ class RiskManager:
             and o.request.instrument.token == req.instrument.token
             and o.request.product == req.product
             and o.request.side == req.side
+            and not o.request.protective  # a resting stop must not block a real exit
         )
         return req.quantity <= abs(pos.quantity) - already_exiting
 
     # --- checks ----------------------------------------------------------------
 
-    def check(self, req: OrderRequest, pending: Iterable[Order] = ()) -> RiskDecision:
+    def check(
+        self, req: OrderRequest, pending: Iterable[Order] = (), quote: Tick | None = None
+    ) -> RiskDecision:
         pending = list(pending)
         if self.is_exit(req, pending):
             return RiskDecision(True, is_exit=True)
-        reason = self._entry_violation(req, pending)
+        reason = self._entry_violation(req, pending) or self._liquidity_violation(req, quote)
         if reason:
             self.rejections += 1
             log.warning(
@@ -132,6 +144,11 @@ class RiskManager:
         lots = req.quantity // inst.lot_size
         if lots > lim.max_lots_per_order:
             return f"{lots} lots exceeds max {lim.max_lots_per_order} per order"
+        freeze = lim.freeze_limits.get(inst.name)
+        if freeze and req.quantity > freeze * lim.max_slices:
+            return f"quantity {req.quantity} exceeds {lim.max_slices} x freeze limit {freeze}"
+        if inst.expiry == now.date() and now.time() >= lim.expiry_no_entry_after:
+            return f"no new entries on expiry day after {lim.expiry_no_entry_after:%H:%M}"
         if not (lim.trading_start <= now.time() < lim.trading_end):
             return f"outside trading window {lim.trading_start:%H:%M}-{lim.trading_end:%H:%M}"
         pos = self._positions.get(req.strategy_id, inst.token, req.product)
@@ -160,6 +177,23 @@ class RiskManager:
                 and prev.quantity == req.quantity
             ):
                 return "duplicate order within guard window"
+        return ""
+
+    def _liquidity_violation(self, req: OrderRequest, quote: Tick | None) -> str:
+        """Option entries only: reject strikes with no quote, a wide spread or thin volume."""
+        if not req.instrument.is_option:
+            return ""
+        lim = self.limits
+        if quote is None:
+            return "no quote for option (subscribe it before trading)"
+        if not quote.bid or not quote.ask:
+            return "option has no two-sided quote"
+        mid = (quote.bid + quote.ask) / 2
+        spread_pct = (quote.ask - quote.bid) / mid * 100
+        if spread_pct > lim.option_max_spread_pct:
+            return f"spread {spread_pct:.1f}% exceeds {lim.option_max_spread_pct:.1f}%"
+        if quote.volume < lim.option_min_volume:
+            return f"volume {quote.volume} below minimum {lim.option_min_volume}"
         return ""
 
     # --- P&L -------------------------------------------------------------------
