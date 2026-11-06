@@ -30,9 +30,18 @@ from tests.test_live_executor import FastLimiter
 DAYS = [date(2025, 11, 3), date(2025, 11, 4), date(2025, 11, 5)]
 
 
+_CACHE: dict[tuple[Any, ...], MemoryHistoryStore] = {}
+
+
 async def synth_history(days: list[date], seed: int = 1, skip: Any = None) -> MemoryHistoryStore:
-    """1-minute candles for the synthetic NIFTY universe: 4 random-walk steps per minute."""
+    """1-minute candles for the synthetic NIFTY universe: 4 random-walk steps per minute.
+    Cached per arguments (backtests only read the store; generating is the slow part)."""
+    key = (tuple(days), seed)
+    if skip is None and key in _CACHE:
+        return _CACHE[key]
     store = MemoryHistoryStore()
+    if skip is None:
+        _CACHE[key] = store
     for n, d in enumerate(days):
         u = synthetic_nifty(d)
         await store.upsert_instruments(u.all, d)
