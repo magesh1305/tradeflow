@@ -29,7 +29,7 @@ plugins = ["pydantic.mypy"]
 exclude = ["^\\.venv/", "^app/storage/migrations/versions/"]
 
 [[tool.mypy.overrides]]
-module = ["kiteconnect.*", "py_vollib.*", "apscheduler.*", "scipy.*", "pandas.*"]
+module = ["kiteconnect.*", "vollib.*", "apscheduler.*", "scipy.*", "pandas.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
