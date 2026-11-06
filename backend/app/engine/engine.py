@@ -30,6 +30,7 @@ from app.core.clock import Clock, ManualClock
 from app.core.models import (
     Candle,
     Fill,
+    Instrument,
     Order,
     OrderRequest,
     OrderStatus,
@@ -38,13 +39,19 @@ from app.core.models import (
     Side,
     Tick,
 )
-from app.data.instruments import InstrumentStore
+from app.data.instruments import InstrumentStore, weekdays_until
+from app.data.option_chain import OptionChainService
 from app.engine.candles import CandleAggregator
-from app.engine.positions import Position, PositionBook
+from app.engine.legs import LegGroup, LegGroupManager, LegSpec
+from app.engine.positions import Position, PositionBook, PositionKey
+from app.engine.smart_orders import Chaser, OptionOrderRules
+from app.engine.smart_orders import prepare as prepare_option_order
+from app.engine.stops import StopManager
 from app.execution.base import Executor
 from app.feeds.base import Feed
 from app.notify.base import Level, Notifier
-from app.risk.manager import RiskManager
+from app.risk.manager import RiskDecision, RiskManager
+from app.risk.margin import MarginChecker
 from app.strategies.base import Strategy
 
 log = logging.getLogger(__name__)
@@ -55,6 +62,7 @@ SYSTEM = "__system__"
 class OrderJournal(Protocol):
     def record_order(self, order: Order) -> None: ...
     def record_fill(self, fill: Fill, charges: float = 0.0) -> None: ...
+    def record_leg_group(self, group: LegGroup) -> None: ...
 
 
 class NullJournal:
@@ -63,6 +71,16 @@ class NullJournal:
 
     def record_fill(self, fill: Fill, charges: float = 0.0) -> None:
         pass
+
+    def record_leg_group(self, group: LegGroup) -> None:
+        pass
+
+
+@dataclass(frozen=True, slots=True)
+class Prepared:
+    order: Order
+    decision: RiskDecision
+    converted: bool  # option MARKET request turned into a chased LIMIT
 
 
 class EngineBlockedError(RuntimeError):
@@ -93,6 +111,15 @@ class EngineConfig:
     square_off_time: time = time(15, 15)
     market_open: time = time(9, 15)
     pnl_check_interval: timedelta = timedelta(seconds=1)
+    option_rules: OptionOrderRules = field(default_factory=OptionOrderRules)
+    stop_limit_buffer_pct: float = 5.0
+    leg_group_timeout_sec: float = 30.0
+    risk_free_rate: float = 0.065
+    index_underlyings: frozenset[str] = frozenset(
+        {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", "BANKEX"}
+    )
+    physical_settlement_exit_days: int = 1
+    physical_settlement_exit_time: time = time(15, 0)
 
 
 class _Context:
@@ -141,7 +168,29 @@ class _Context:
     def cancel(self, client_order_id: str) -> None:
         order = self._engine.orders.get(client_order_id)
         if order is not None and order.request.strategy_id == self.strategy_id:
-            self._engine.executor.cancel(client_order_id)
+            self._engine.cancel_order(client_order_id)
+
+    @property
+    def option_chain(self) -> OptionChainService:
+        return self._engine.option_chain
+
+    def _require_running(self) -> None:
+        if self._slot.state is not StrategyState.RUNNING:
+            raise StrategyNotRunningError(f"{self.strategy_id} is {self._slot.state}")
+
+    def place_legs(
+        self, specs: list[LegSpec], product: Product, timeout_sec: float | None = None
+    ) -> LegGroup:
+        self._require_running()
+        return self._engine.legs.place(self.strategy_id, specs, product, timeout_sec)
+
+    def protect(self, instrument: Instrument, stop_price: float, product: Product) -> None:
+        self._require_running()
+        self._engine.stops.protect(self.strategy_id, instrument, product, stop_price)
+
+    def unprotect(self, instrument: Instrument) -> None:
+        for p in Product:
+            self._engine.stops.release((self.strategy_id, instrument.token, p))
 
 
 class TradingEngine:
@@ -158,6 +207,7 @@ class TradingEngine:
         config: EngineConfig | None = None,
         wall_clock: Clock | None = None,
         journal: OrderJournal | None = None,
+        margin: MarginChecker | None = None,
     ) -> None:
         self.instruments = instruments
         self.feed = feed
@@ -169,6 +219,20 @@ class TradingEngine:
         self.config = config or EngineConfig()
         self._wall_clock = wall_clock
         self.journal: OrderJournal = journal or NullJournal()
+        self.margin = margin
+        self._unsent: set[str] = set()  # created, waiting for margin / not yet sent
+        self.option_chain = OptionChainService(
+            instruments, self.last_tick, clock, self.config.risk_free_rate
+        )
+        self.chaser = Chaser(
+            self.config.option_rules,
+            self.last_tick,
+            lambda cid, px: self.executor.modify(cid, price=px),
+            lambda text: self.alert(text, "warning"),
+        )
+        self.stops = StopManager(self, self.config.stop_limit_buffer_pct)
+        self.legs = LegGroupManager(self, self.config.leg_group_timeout_sec)
+        self._settlement_exited: set[tuple[PositionKey, date]] = set()
         # Set by crash recovery when our state disagrees with the broker. While set,
         # no strategy can start until a human resolves it through the API.
         self.blocked_reason = ""
@@ -266,13 +330,20 @@ class TradingEngine:
         self.fills.append(fill)
         self.positions.apply_fill(fill)
         self.journal.record_fill(fill)
+        key = (fill.strategy_id, fill.instrument.token, fill.product)
         self._post(lambda: self._handle_fill(fill))
+        self._post(lambda: self.stops.on_position_change(key))
         self._pump_if_idle()
 
     def _executor_order_update(self, order: Order) -> None:
         snapshot = dataclasses.replace(order)
         self.journal.record_order(snapshot)
         self._post(lambda: self._handle_order_update(snapshot))
+        live = self.orders.get(order.client_order_id, order)
+        if snapshot.status.is_terminal:
+            self._post(lambda: self.stops.on_order_terminal(snapshot))
+        if live.request.leg_group_id or snapshot.status.is_terminal:
+            self._post(lambda: self.legs.on_order(live))
         self._pump_if_idle()
 
     def _pump_if_idle(self) -> None:
@@ -330,8 +401,34 @@ class TradingEngine:
         ):
             self._last_pnl_check = now
             self.check_pnl()
+        self.chaser.on_time(now, self.orders)
+        self.legs.on_time(now)
+        self._physical_settlement_exits(now)
+        self._pump()
         if now.time() >= self.config.square_off_time:
             self.scheduled_square_off()
+
+    def _physical_settlement_exits(self, now: datetime) -> None:
+        """Exit stock F&O positions before expiry to avoid physical delivery."""
+        cfg = self.config
+        if now.time() < cfg.physical_settlement_exit_time:
+            return
+        today = now.date()
+        for pos in self.positions.open_positions():
+            inst = pos.instrument
+            if inst.expiry is None or inst.name in cfg.index_underlyings:
+                continue
+            if weekdays_until(today, inst.expiry) > cfg.physical_settlement_exit_days:
+                continue
+            marker = (pos.key, today)
+            if marker in self._settlement_exited:
+                continue
+            self._settlement_exited.add(marker)
+            self.stops.release(pos.key)
+            self._exit(pos, "physical settlement exit before expiry")
+            self.alert(
+                f"Exiting {inst.tradingsymbol} before expiry (physical settlement)", "warning"
+            )
 
     def scheduled_square_off(self) -> None:
         """Daily MIS square-off. Idempotent per day (engine timer and scheduler both call it)."""
@@ -361,8 +458,8 @@ class TradingEngine:
             slot.error = f"{type(exc).__name__}: {exc}"
             log.exception("strategy failed; disabled", extra={"strategy": slot.strategy.id})
             for o in self.open_orders():
-                if o.request.strategy_id == slot.strategy.id:
-                    self.executor.cancel(o.client_order_id)
+                if o.request.strategy_id == slot.strategy.id and not o.request.protective:
+                    self.cancel_order(o.client_order_id)
             self._alert(
                 f"Strategy {slot.strategy.id} disabled after error: {slot.error}", "critical"
             )
@@ -387,11 +484,13 @@ class TradingEngine:
         if slot.state is StrategyState.RUNNING:
             self._call(slot, slot.strategy.on_stop)
         slot.state = StrategyState.STOPPED
+        # Protective stops stay at the broker unless the positions are exited too.
         for o in self.open_orders():
-            if o.request.strategy_id == strategy_id:
-                self.executor.cancel(o.client_order_id)
+            if o.request.strategy_id == strategy_id and not o.request.protective:
+                self.cancel_order(o.client_order_id)
         if exit_positions:
             for pos in self.positions.open_positions(strategy_id):
+                self.stops.release(pos.key)
                 self._exit(pos, "strategy stopped")
         self._pump()
         log.info("strategy stopped", extra={"strategy": strategy_id, "exit": exit_positions})
@@ -411,28 +510,156 @@ class TradingEngine:
         return [o for o in self.orders.values() if not o.status.is_terminal]
 
     def submit_order(self, req: OrderRequest) -> Order:
-        """The only path to an executor. Every order is risk-checked here."""
+        """The only path to an executor: risk check, option pricing, margin, then send."""
+        (p,) = self.prepare_group([req])
+        if not p.decision.allowed:
+            self.reject(p.order, f"risk: {p.decision.reason}")
+            return p.order
+        if p.decision.is_exit or req.protective:
+            self.send(p.order, is_exit=p.decision.is_exit, chase=p.converted)
+            return p.order
+        self.check_margin(
+            [p.order.request],
+            on_ok=lambda: self.send(p.order, is_exit=False, chase=p.converted),
+            on_fail=lambda reason: self.reject(p.order, reason),
+        )
+        return p.order
+
+    def prepare_group(self, reqs: list[OrderRequest]) -> list[Prepared]:
+        """Risk-check each request and create its Order (not yet sent).
+
+        Each request is checked BEFORE its own order is recorded: otherwise the new
+        order would count as its own "pending exit" and a genuine exit would be
+        misclassified as an entry. Later requests see earlier ones as pending."""
+        pending = self.open_orders()
         now = self.clock.now()
-        order = Order(req, created_at=now, updated_at=now)
-        # Risk-check BEFORE recording the order: otherwise the new order counts as
-        # its own "pending exit" and a genuine exit is misclassified as an entry.
-        decision = self.risk.check(req, self.open_orders())
-        self.orders[order.client_order_id] = order
-        if not decision.allowed:
-            order.status = OrderStatus.REJECTED
-            order.status_message = f"risk: {decision.reason}"
-            self._executor_order_update(order)
-            self._alert(
-                f"Order rejected [{req.strategy_id}] {req.side} {req.quantity} "
-                f"{req.instrument.tradingsymbol}: {decision.reason}",
-                "warning",
-            )
-            return order
+        out: list[Prepared] = []
+        for original in reqs:
+            quote = self.last_tick(original.instrument.token)
+            decision = self.risk.check(original, pending, quote)
+            req, converted = original, False
+            if decision.allowed:
+                req, converted = prepare_option_order(
+                    original, quote, is_exit=decision.is_exit, rules=self.config.option_rules
+                )
+            order = Order(req, created_at=now, updated_at=now)
+            self.orders[order.client_order_id] = order
+            self._unsent.add(order.client_order_id)
+            pending.append(order)
+            out.append(Prepared(order, decision, converted))
+        return out
+
+    def send(self, order: Order, *, is_exit: bool, chase: bool) -> None:
+        cid = order.client_order_id
+        if cid not in self._unsent or order.status.is_terminal:
+            return  # cancelled while waiting for margin
+        self._unsent.discard(cid)
         # Journal the intent (with its tag) before the broker sees it, so crash
         # recovery can match whatever Kite ends up holding.
         self.journal.record_order(order)
+        if chase:
+            self.chaser.track(order, is_exit=is_exit, now=self.clock.now())
         self.executor.submit(order)
-        return order
+
+    def reject(self, order: Order, reason: str) -> None:
+        self._unsent.discard(order.client_order_id)
+        order.status = OrderStatus.REJECTED
+        order.status_message = reason
+        order.updated_at = self.clock.now()
+        self._executor_order_update(order)
+        req = order.request
+        self._alert(
+            f"Order rejected [{req.strategy_id}] {req.side} {req.quantity} "
+            f"{req.instrument.tradingsymbol}: {reason}",
+            "warning",
+        )
+
+    def cancel_order(self, client_order_id: str) -> None:
+        order = self.orders.get(client_order_id)
+        if order is None or order.status.is_terminal:
+            return
+        if client_order_id in self._unsent:
+            self._unsent.discard(client_order_id)
+            order.status = OrderStatus.CANCELLED
+            order.status_message = "cancelled before sending"
+            order.updated_at = self.clock.now()
+            self._executor_order_update(order)
+            return
+        self.executor.cancel(client_order_id)
+
+    def check_margin(
+        self,
+        reqs: list[OrderRequest],
+        *,
+        on_ok: Callable[[], None],
+        on_fail: Callable[[str], None],
+    ) -> None:
+        """Run `on_ok` if margin suffices for `reqs` (opening orders), else `on_fail`."""
+        if not reqs or self.margin is None:
+            on_ok()
+            return
+        mine = {r.client_order_id for r in reqs}
+        pending = [o for o in self.open_orders() if o.client_order_id not in mine]
+        result = self.margin.check_now(reqs, self.positions.open_positions(), pending)
+        if result is not None:
+            if result.ok:
+                on_ok()
+            else:
+                on_fail(result.reason)
+            return
+        checker = self.margin
+
+        async def run() -> None:
+            res = await checker.check(reqs)
+            if res.ok:
+                on_ok()
+            else:
+                on_fail(res.reason)
+            self._pump()
+
+        task = asyncio.get_running_loop().create_task(run(), name="margin-check")
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    def exit_quantity(
+        self,
+        strategy_id: str,
+        inst: Instrument,
+        product: Product,
+        *,
+        opened_side: Side,
+        qty: int,
+        reason: str,
+    ) -> Order | None:
+        """Exit up to `qty` of a position opened with `opened_side`, never more than held."""
+        pos = self.positions.get(strategy_id, inst.token, product)
+        if pos is None or pos.quantity == 0 or (pos.quantity > 0) != (opened_side is Side.BUY):
+            return None
+        side = opened_side.opposite
+        in_flight = sum(
+            o.pending_quantity
+            for o in self.open_orders()
+            if o.request.strategy_id == strategy_id
+            and o.request.instrument.token == inst.token
+            and o.request.product == product
+            and o.request.side == side
+            and not o.request.protective
+        )
+        qty = min(qty, abs(pos.quantity) - in_flight)
+        if qty <= 0:
+            return None
+        self.stops.release(pos.key)
+        return self.submit_order(
+            OrderRequest(
+                strategy_id=strategy_id,
+                instrument=inst,
+                side=side,
+                quantity=qty,
+                order_type=OrderType.MARKET,
+                product=product,
+                reason=reason,
+            )
+        )
 
     def _exit(self, pos: Position, reason: str) -> Order | None:
         side = Side.SELL if pos.quantity > 0 else Side.BUY
@@ -443,6 +670,7 @@ class TradingEngine:
             and o.request.instrument.token == pos.instrument.token
             and o.request.product == pos.product
             and o.request.side == side
+            and not o.request.protective
         )
         qty = abs(pos.quantity) - in_flight
         if qty <= 0:
@@ -464,9 +692,17 @@ class TradingEngine:
     ) -> None:
         """Cancel open orders and flatten positions. `products=None` means everything
         (kill switch, manual); the scheduled square-off passes {MIS} so NRML carries."""
+        # Open leg groups are aborted (not unwound) and stops released: the
+        # square-off below flattens everything, and unwinding too would double-exit.
+        for g in self.legs.open_groups():
+            if products is None or any(o.request.product in products for o in g.legs):
+                self.legs.abort(g, reason)
+        for key in list(self.stops.protected()):
+            if products is None or key[2] in products:
+                self.stops.release(key)
         for o in self.open_orders():
             if products is None or o.request.product in products:
-                self.executor.cancel(o.client_order_id)
+                self.cancel_order(o.client_order_id)
         self._pump()
         for pos in self.positions.open_positions():
             if products is None or pos.product in products:
@@ -487,6 +723,9 @@ class TradingEngine:
             self._on_kill(reason)
 
     def _on_kill(self, reason: str) -> None:
+        # Abort open leg groups FIRST: stopping strategies cancels their leg orders,
+        # which would otherwise start an unwind on top of the square-off (double exit).
+        self.legs.abort_all(f"kill switch: {reason}")
         for sid, slot in self.slots.items():
             if slot.state is StrategyState.RUNNING:
                 self.stop_strategy(sid)
@@ -551,6 +790,17 @@ class TradingEngine:
         """Strategies stay stopped; a human starts them again."""
         self.risk.kill_switch.reset()
         self._alert("Kill switch reset (strategies remain stopped)", "warning")
+
+    # --- leg groups & alerts -----------------------------------------------------------------
+
+    def on_leg_group_change(self, group: LegGroup) -> None:
+        self.journal.record_leg_group(group)
+        slot = self.slots.get(group.strategy_id)
+        if slot is not None:
+            self._post(lambda: self._call(slot, slot.strategy.on_legs, group))
+
+    def alert(self, text: str, level: Level = "info") -> None:
+        self._alert(text, level)
 
     # --- event pump -----------------------------------------------------------------------------
 

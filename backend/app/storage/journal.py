@@ -21,13 +21,14 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.clock import now_ist
 from app.core.models import Fill, Order, Product
 from app.notify.base import Notifier
-from app.storage.models import DailyPnlRow, FillRow, OrderEventRow, OrderRow
+from app.storage.models import DailyPnlRow, FillRow, LegGroupRow, OrderEventRow, OrderRow
 
 log = logging.getLogger(__name__)
 
-RecordKind = Literal["order", "fill"]
+RecordKind = Literal["order", "fill", "leg_group"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,14 @@ class SqlJournalStore:
                             average_price=d["average_price"],
                             message=d["status_message"],
                             payload=None,
+                        )
+                    )
+                elif rec.kind == "leg_group":
+                    stmt = insert(LegGroupRow).values(**rec.data)
+                    await s.execute(
+                        stmt.on_conflict_do_update(
+                            index_elements=["id"],
+                            set_={k: stmt.excluded[k] for k in rec.data if k != "id"},
                         )
                     )
                 else:
@@ -223,6 +232,12 @@ class Journal:
         except Exception:
             log.exception("journal enqueue failed")
 
+    def record_leg_group(self, group: Any) -> None:
+        try:
+            self._queue.put_nowait(Record("leg_group", group.as_row(self.mode, now_ist())))
+        except Exception:
+            log.exception("journal enqueue failed")
+
     @property
     def backlog(self) -> int:
         return self._queue.qsize()
@@ -293,6 +308,7 @@ class MemoryJournalStore:
         self.events: list[dict[str, Any]] = []
         self.fills: dict[str, dict[str, Any]] = {}
         self.daily_pnl: dict[tuple[date, str, str], dict[str, Any]] = {}
+        self.leg_groups: dict[str, dict[str, Any]] = {}
         self.fail_writes = 0  # make the next N writes raise
 
     async def write(self, batch: list[Record]) -> None:
@@ -303,6 +319,8 @@ class MemoryJournalStore:
             if rec.kind == "order":
                 self.orders[rec.data["client_order_id"]] = dict(rec.data)
                 self.events.append(dict(rec.data))
+            elif rec.kind == "leg_group":
+                self.leg_groups[rec.data["id"]] = dict(rec.data)
             else:
                 if rec.data["client_order_id"] not in self.orders:
                     raise RuntimeError("FK violation: fill before order")

@@ -13,10 +13,12 @@ from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession, RedisTokenStore, TokenStore
 from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
+from app.core.models import Tick
 from app.core.ratelimit import RateLimiter
 from app.data.instruments import InstrumentStore
 from app.engine.engine import EngineConfig, OrderJournal, TradingEngine
 from app.engine.positions import PositionBook
+from app.engine.smart_orders import OptionOrderRules
 from app.execution.base import Executor
 from app.execution.live import LiveExecutor
 from app.execution.paper import PaperExecutor
@@ -26,6 +28,7 @@ from app.feeds.random_walk import RandomWalkFeed, synthetic_nifty
 from app.notify.base import LogNotifier, Notifier
 from app.notify.telegram import CompositeNotifier, TelegramNotifier
 from app.risk.manager import RiskLimits, RiskManager
+from app.risk.margin import EstimatedMargin, KiteMargin, MarginChecker
 from app.storage.db import make_engine, make_sessionmaker
 from app.storage.journal import Journal, SqlJournalStore
 from app.strategies.registry import StrategyConfig, discover
@@ -124,8 +127,53 @@ def build_executor(settings: Settings, clock: Clock, broker: KiteBroker | None) 
         settings.assert_safe()  # belt and braces: never build a live executor unsafely
         if broker is None or not broker.orders_enabled:
             raise RuntimeError("live mode needs a Kite session with order endpoints enabled")
-        return LiveExecutor(broker, clock)
+        return LiveExecutor(broker, clock, freeze_limits=settings.freeze_limits)
     return PaperExecutor(clock, slippage_ticks=settings.paper_slippage_ticks)
+
+
+def engine_config(settings: Settings) -> EngineConfig:
+    return EngineConfig(
+        square_off_time=settings.square_off_time,
+        market_open=settings.market_open,
+        option_rules=OptionOrderRules(
+            enabled=settings.option_limit_orders,
+            buffer_ticks=settings.option_limit_buffer_ticks,
+            exit_buffer_pct=settings.option_exit_buffer_pct,
+            chase_after_sec=settings.option_chase_after_sec,
+            chase_max=settings.option_chase_max,
+        ),
+        stop_limit_buffer_pct=settings.stop_limit_buffer_pct,
+        leg_group_timeout_sec=settings.leg_group_timeout_sec,
+        risk_free_rate=settings.risk_free_rate,
+        index_underlyings=frozenset(settings.index_underlyings),
+        physical_settlement_exit_days=settings.physical_settlement_exit_days,
+        physical_settlement_exit_time=settings.physical_settlement_exit_time,
+    )
+
+
+class _QuoteProxy:
+    """Lets the paper margin estimator read prices from the engine built after it."""
+
+    engine: TradingEngine | None = None
+
+    def __call__(self, token: int) -> Tick | None:
+        return self.engine.last_tick(token) if self.engine else None
+
+
+def build_margin_checker(
+    settings: Settings,
+    broker: KiteBroker | None,
+    positions: PositionBook,
+    quote: Callable[[int], Tick | None],
+) -> MarginChecker | None:
+    """Live: Kite's margin APIs. Paper/backtest: a configurable estimate."""
+    if not settings.margin_check_enabled:
+        return None
+    if settings.is_live:
+        if broker is None:
+            raise RuntimeError("live mode needs a Kite session for margin checks")
+        return KiteMargin(broker)
+    return EstimatedMargin(settings.paper_capital, settings.paper_margin_pct, quote)
 
 
 def build_engine(
@@ -143,6 +191,7 @@ def build_engine(
     """Wire the engine. Returns the engine and the ids of strategies enabled at start."""
     positions = PositionBook()
     risk = RiskManager(RiskLimits.from_settings(settings), positions, clock)
+    clock_quote = _QuoteProxy()
     engine = TradingEngine(
         instruments=instruments,
         feed=feed,
@@ -151,12 +200,12 @@ def build_engine(
         positions=positions,
         clock=clock,
         notifier=notifier,
-        config=EngineConfig(
-            square_off_time=settings.square_off_time, market_open=settings.market_open
-        ),
+        config=engine_config(settings),
         wall_clock=SystemClock() if realtime else None,
         journal=journal,
+        margin=build_margin_checker(settings, broker, positions, clock_quote),
     )
+    clock_quote.engine = engine
     discover()
     for cfg in strategy_configs:
         engine.add_strategy(build_strategy(cfg))

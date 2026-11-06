@@ -55,7 +55,11 @@ async def trade_then_crash(store: MemoryJournalStore) -> None:
     await j.start()
     engine = await new_engine(j)
     await engine.start(["s"])
-    await push(engine, tick(FUT, 100, ist(10, 0)), tick(CE, 50, ist(10, 0)))
+    await push(
+        engine,
+        tick(FUT, 100, ist(10, 0)),
+        tick(CE, 50, ist(10, 0), bid=49.9, ask=50.1, volume=100_000),
+    )
     s = engine.slots["s"].strategy
     s.buy(FUT, 150)
     s.sell(FUT, 75)
