@@ -80,7 +80,7 @@ def test_order_pending_quantity() -> None:
 
 
 def test_clock_helpers() -> None:
-    naive = datetime(2025, 11, 3, 9, 15)  # noqa: DTZ001 - naive on purpose
+    naive = datetime(2025, 11, 3, 9, 15)
     assert to_ist(naive).tzinfo is IST
     utc = datetime(2025, 11, 3, 3, 45, tzinfo=IST).astimezone(IST)
     assert to_ist(utc).hour == 3
