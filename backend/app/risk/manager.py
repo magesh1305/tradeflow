@@ -196,6 +196,10 @@ class RiskManager:
             return f"volume {quote.volume} below minimum {lim.option_min_volume}"
         return ""
 
+    def orders_last_minute(self) -> int:
+        cutoff = self._clock.now() - timedelta(minutes=1)
+        return sum(1 for ts, _ in self._recent if ts > cutoff)
+
     # --- P&L -------------------------------------------------------------------
 
     def check_daily_loss(self, net_pnl: float) -> bool:

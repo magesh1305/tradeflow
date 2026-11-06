@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql+asyncpg://tradeflow:tradeflow@localhost:5432/tradeflow"
     strategies_file: Path = Path("strategies.yaml")
+    # Params changed from the dashboard (PUT /strategies/{id}/params) survive the
+    # daily restart here. Not committed to git.
+    strategy_overrides_file: Path = Path("strategies.local.yaml")
 
     # --- trading window (IST) ---------------------------------------------------
     market_open: time = time(9, 15)
@@ -159,6 +162,10 @@ class Settings(BaseSettings):
     record_underlyings: list[str] = Field(default_factory=lambda: ["NIFTY", "BANKNIFTY"])
     record_strikes_width: int = Field(default=10, ge=1, le=50)  # strikes either side of ATM
     record_expiries: int = Field(default=2, ge=1, le=6)
+
+    # --- API --------------------------------------------------------------------
+    # /docs and /openapi.json are unauthenticated, so they're off unless enabled.
+    api_docs: bool = False
 
     # --- process --------------------------------------------------------------
     # Start the engine when the API starts (tests turn this off).

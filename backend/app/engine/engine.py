@@ -102,6 +102,10 @@ class StrategyNotRunningError(RuntimeError):
     pass
 
 
+class StrategyRunningError(RuntimeError):
+    pass
+
+
 @dataclass
 class StrategySlot:
     strategy: Strategy
@@ -514,6 +518,19 @@ class TradingEngine:
     def subscribe_ticks(self, slot: StrategySlot, tokens: list[int]) -> None:
         slot.tick_tokens.update(tokens)
         self.feed.subscribe(tokens)
+
+    def subscribe_market(self, tokens: list[int]) -> None:
+        """Market data not owned by a strategy (e.g. the dashboard's option chain)."""
+        self.feed.subscribe(tokens)
+
+    def set_strategy_params(self, strategy_id: str, params: dict[str, Any]) -> Any:
+        """Validate and apply new params. Only allowed while the strategy is stopped."""
+        slot = self.slots[strategy_id]
+        if slot.state is StrategyState.RUNNING:
+            raise StrategyRunningError("stop the strategy before changing its params")
+        validated = slot.strategy.Params.model_validate(params)
+        slot.strategy.params = validated
+        return validated
 
     def subscribe_candles(self, slot: StrategySlot, token: int, interval: int) -> None:
         self.candles.add(token, interval)

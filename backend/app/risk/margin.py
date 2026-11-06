@@ -40,6 +40,9 @@ class MarginChecker(Protocol):
 
     async def check(self, reqs: list[OrderRequest]) -> MarginResult: ...
 
+    async def funds(self, positions: list[Position], pending: list[Order]) -> dict[str, Any]:
+        """Available / used margin for the dashboard."""
+
 
 def _price(inst: Instrument, req_price: float | None, quote: Tick | None) -> float:
     if req_price:
@@ -97,6 +100,15 @@ class EstimatedMargin:
     async def check(self, reqs: list[OrderRequest]) -> MarginResult:
         return self.check_now(reqs, [], [])
 
+    async def funds(self, positions: list[Position], pending: list[Order]) -> dict[str, Any]:
+        used = self._used(positions, pending)
+        return {
+            "source": "paper estimate",
+            "capital": self._capital,
+            "used": used,
+            "available": self._capital - used,
+        }
+
 
 class KiteMargin:
     def __init__(self, broker: KiteBroker) -> None:
@@ -106,6 +118,17 @@ class KiteMargin:
         self, reqs: list[OrderRequest], positions: list[Position], pending: list[Order]
     ) -> MarginResult | None:
         return None  # always asynchronous
+
+    async def funds(self, positions: list[Position], pending: list[Order]) -> dict[str, Any]:
+        try:
+            eq = await self._broker.margins("equity")
+        except BrokerError as exc:
+            return {"source": "kite", "error": str(exc)}
+        return {
+            "source": "kite",
+            "available": float(eq.get("net", 0.0)),
+            "used": float((eq.get("utilised") or {}).get("debits", 0.0)),
+        }
 
     @staticmethod
     def _params(broker: KiteBroker, req: OrderRequest) -> dict[str, Any]:
