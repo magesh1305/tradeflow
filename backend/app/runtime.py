@@ -15,10 +15,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app import factory
+from app.backtest.runner import BacktestRequest
+from app.backtest.store import BacktestStore
 from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession
 from app.config import Settings
@@ -39,7 +44,40 @@ from app.engine.recovery import (
 )
 from app.notify.base import Notifier
 from app.storage.journal import Journal, daily_pnl_rows
-from app.strategies.registry import discover, load_configs
+from app.strategies.registry import (
+    StrategyConfig,
+    discover,
+    load_configs,
+)
+
+BacktestExecutor = Callable[[BacktestRequest, int], Awaitable[None]]
+
+
+def load_overrides(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {str(k): dict(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def save_overrides(path: Path, overrides: dict[str, dict[str, Any]]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        "# Written by the dashboard (PUT /strategies/{id}/params). Overrides strategies.yaml.\n"
+        + yaml.safe_dump(overrides, sort_keys=True),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+
+
+def apply_overrides(
+    configs: list[StrategyConfig], overrides: dict[str, dict[str, Any]]
+) -> list[StrategyConfig]:
+    return [
+        c.model_copy(update={"params": overrides[c.id]}) if c.id in overrides else c
+        for c in configs
+    ]
+
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +93,8 @@ class Runtime:
         clock: Clock | None = None,
         exit_process: Callable[[], None] | None = None,
         history: HistoryStore | None = None,
+        backtests: BacktestStore | None = None,
+        backtest_executor: BacktestExecutor | None = None,
     ) -> None:
         self.settings = settings
         self.notifier = notifier
@@ -63,6 +103,9 @@ class Runtime:
         self.clock = clock or SystemClock()
         self._exit_process = exit_process
         self.history = history
+        self.backtests = backtests
+        self._backtest_executor = backtest_executor
+        self._backtest_tasks: set[asyncio.Task[None]] = set()
         self.engine: TradingEngine | None = None
         self.broker: KiteBroker | None = None
         self.recovery: RecoveryReport | None = None
@@ -95,6 +138,9 @@ class Runtime:
                 self.scheduler.shutdown(wait=False)
         await self.stop_engine("shutdown")
         await self.journal.stop()
+        shutdown = getattr(self._backtest_executor, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
 
     async def on_login(self, session: KiteSession) -> None:
         """Called after a successful /auth/callback."""
@@ -129,6 +175,7 @@ class Runtime:
             feed = factory.build_feed(s, session, today)
             discover()
             configs = load_configs(s.strategies_file) if s.strategies_file.exists() else []
+            configs = apply_overrides(configs, load_overrides(s.strategy_overrides_file))
             engine, enabled = factory.build_engine(
                 s,
                 instruments=instruments,
@@ -197,6 +244,37 @@ class Runtime:
             "warning",
         )
         return {"adopted_positions": adopted}
+
+    # --- strategy params & backtests -----------------------------------------------------
+
+    def set_strategy_params(self, strategy_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Validate, apply (strategy must be stopped) and persist for the next restart."""
+        if self.engine is None:
+            raise RuntimeError("engine not running")
+        validated = self.engine.set_strategy_params(strategy_id, params)
+        data = validated.model_dump(mode="json")
+        overrides = load_overrides(self.settings.strategy_overrides_file)
+        overrides[strategy_id] = data
+        save_overrides(self.settings.strategy_overrides_file, overrides)
+        return dict(data)
+
+    async def submit_backtest(self, req: BacktestRequest) -> int:
+        if self.backtests is None or self._backtest_executor is None:
+            raise RuntimeError("backtests are not configured")
+        run_id = await self.backtests.create(req)
+        store, executor = self.backtests, self._backtest_executor
+
+        async def run() -> None:
+            try:
+                await executor(req, run_id)
+            except Exception as exc:
+                log.exception("backtest failed", extra={"run_id": run_id})
+                await store.fail(run_id, f"{type(exc).__name__}: {exc}")
+
+        task = asyncio.get_running_loop().create_task(run(), name=f"backtest-{run_id}")
+        self._backtest_tasks.add(task)
+        task.add_done_callback(self._backtest_tasks.discard)
+        return run_id
 
     # --- scheduled jobs -----------------------------------------------------------------
 

@@ -219,6 +219,8 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
     import os  # noqa: PLC0415
     import signal  # noqa: PLC0415
 
+    from app.backtest.job import ProcessBacktestExecutor  # noqa: PLC0415
+    from app.backtest.store import SqlBacktestStore  # noqa: PLC0415
     from app.runtime import Runtime  # noqa: PLC0415 - runtime imports factory
 
     notifier = build_notifier(settings)
@@ -234,6 +236,8 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
         auth=auth,
         exit_process=exit_process if settings.exit_on_session_expiry else None,
         history=build_history_store(settings),
+        backtests=SqlBacktestStore(make_sessionmaker(make_engine(settings.database_url))),
+        backtest_executor=ProcessBacktestExecutor(settings),
     )
 
 
