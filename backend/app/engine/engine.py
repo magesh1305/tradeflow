@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from app.core.clock import Clock, ManualClock
 from app.core.models import (
@@ -50,6 +50,23 @@ from app.strategies.base import Strategy
 log = logging.getLogger(__name__)
 
 SYSTEM = "__system__"
+
+
+class OrderJournal(Protocol):
+    def record_order(self, order: Order) -> None: ...
+    def record_fill(self, fill: Fill, charges: float = 0.0) -> None: ...
+
+
+class NullJournal:
+    def record_order(self, order: Order) -> None:
+        pass
+
+    def record_fill(self, fill: Fill, charges: float = 0.0) -> None:
+        pass
+
+
+class EngineBlockedError(RuntimeError):
+    pass
 
 
 class StrategyState(StrEnum):
@@ -140,6 +157,7 @@ class TradingEngine:
         notifier: Notifier,
         config: EngineConfig | None = None,
         wall_clock: Clock | None = None,
+        journal: OrderJournal | None = None,
     ) -> None:
         self.instruments = instruments
         self.feed = feed
@@ -150,6 +168,11 @@ class TradingEngine:
         self.notifier = notifier
         self.config = config or EngineConfig()
         self._wall_clock = wall_clock
+        self.journal: OrderJournal = journal or NullJournal()
+        # Set by crash recovery when our state disagrees with the broker. While set,
+        # no strategy can start until a human resolves it through the API.
+        self.blocked_reason = ""
+        self._hook_depth = 0
         self.candles = CandleAggregator(self.config.market_open)
         self.slots: dict[str, StrategySlot] = {}
         self.orders: dict[str, Order] = {}
@@ -179,12 +202,18 @@ class TradingEngine:
 
     async def start(self, enabled: list[str] | None = None) -> None:
         self.running = True
+        await self.executor.start()
         await self.feed.start(self)
         self._tasks.append(asyncio.create_task(self._consume(), name="engine-consume"))
         if self._wall_clock is not None:
             self._tasks.append(asyncio.create_task(self._timer(), name="engine-timer"))
-        for sid in enabled or []:
-            self.start_strategy(sid)
+        if self.blocked_reason:
+            log.critical(
+                "engine blocked; strategies not started", extra={"reason": self.blocked_reason}
+            )
+        else:
+            for sid in enabled or []:
+                self.start_strategy(sid)
         self._alert(f"Engine started ({len(self.slots)} strategies)", "info")
 
     async def stop(self) -> None:
@@ -193,6 +222,7 @@ class TradingEngine:
                 self._call(slot, slot.strategy.on_stop)
                 slot.state = StrategyState.STOPPED
         await self.feed.stop()
+        await self.executor.stop()
         for t in self._tasks:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -235,11 +265,21 @@ class TradingEngine:
         # fill can happen inside submit()). Only strategy callbacks are deferred.
         self.fills.append(fill)
         self.positions.apply_fill(fill)
+        self.journal.record_fill(fill)
         self._post(lambda: self._handle_fill(fill))
+        self._pump_if_idle()
 
     def _executor_order_update(self, order: Order) -> None:
         snapshot = dataclasses.replace(order)
+        self.journal.record_order(snapshot)
         self._post(lambda: self._handle_order_update(snapshot))
+        self._pump_if_idle()
+
+    def _pump_if_idle(self) -> None:
+        # Live executor callbacks arrive from background tasks, outside any dispatch,
+        # so pump now. Never pump while a strategy hook is running (no re-entry).
+        if self._hook_depth == 0:
+            self._pump()
 
     # --- tick processing -----------------------------------------------------------
 
@@ -290,9 +330,16 @@ class TradingEngine:
         ):
             self._last_pnl_check = now
             self.check_pnl()
-        if now.time() >= self.config.square_off_time and self._squared_off_on != now.date():
-            self._squared_off_on = now.date()
-            self.square_off_all("scheduled square-off", frozenset({Product.MIS}))
+        if now.time() >= self.config.square_off_time:
+            self.scheduled_square_off()
+
+    def scheduled_square_off(self) -> None:
+        """Daily MIS square-off. Idempotent per day (engine timer and scheduler both call it)."""
+        today = self.clock.now().date()
+        if self._squared_off_on == today:
+            return
+        self._squared_off_on = today
+        self.square_off_all("scheduled square-off", frozenset({Product.MIS}))
 
     def _dispatch_candle(self, candle: Candle) -> None:
         key = (candle.token, candle.interval)
@@ -306,6 +353,7 @@ class TradingEngine:
         """Run a strategy hook; any exception disables only that strategy."""
         if slot.state is not StrategyState.RUNNING:
             return
+        self._hook_depth += 1
         try:
             fn(*args)
         except Exception as exc:
@@ -318,9 +366,13 @@ class TradingEngine:
             self._alert(
                 f"Strategy {slot.strategy.id} disabled after error: {slot.error}", "critical"
             )
+        finally:
+            self._hook_depth -= 1
 
     def start_strategy(self, strategy_id: str) -> None:
         slot = self.slots[strategy_id]
+        if self.blocked_reason:
+            raise EngineBlockedError(f"engine blocked: {self.blocked_reason}")
         if self.risk.kill_switch.tripped:
             raise RuntimeError("kill switch is active; reset it before starting strategies")
         if slot.state is StrategyState.RUNNING:
@@ -376,6 +428,9 @@ class TradingEngine:
                 "warning",
             )
             return order
+        # Journal the intent (with its tag) before the broker sees it, so crash
+        # recovery can match whatever Kite ends up holding.
+        self.journal.record_order(order)
         self.executor.submit(order)
         return order
 
@@ -437,6 +492,60 @@ class TradingEngine:
                 self.stop_strategy(sid)
         self.square_off_all(f"kill switch: {reason}")
         self._alert(f"KILL SWITCH: {reason}. All strategies stopped, squaring off.", "critical")
+
+    # --- recovery support -----------------------------------------------------------------
+
+    def block(self, reason: str) -> None:
+        """Keep every strategy stopped until a human resolves `reason` via the API."""
+        self.blocked_reason = reason
+        for sid, slot in self.slots.items():
+            if slot.state is StrategyState.RUNNING:
+                self.stop_strategy(sid)
+        self._alert(f"ENGINE BLOCKED: {reason}. Strategies disabled until resolved.", "critical")
+
+    def unblock(self) -> None:
+        self.blocked_reason = ""
+        self._alert("Engine block resolved by operator (strategies remain stopped)", "warning")
+
+    def adopt_order(self, order: Order) -> None:
+        """Restore an order from the journal and hand it to the executor."""
+        self.orders[order.client_order_id] = order
+        self.executor.adopt(order)
+        self._pump()
+
+    def apply_external_fill(self, order: Order, fill: Fill) -> None:
+        """Book a fill that did not come from an executor (operator-adopted positions)."""
+        self.orders[order.client_order_id] = order
+        self.journal.record_order(order)
+        self.fills.append(fill)
+        self.positions.apply_fill(fill)
+        self.journal.record_fill(fill)
+
+    def daily_summary(self) -> dict[str, dict[str, float]]:
+        """Per-strategy and account ('__account__') P&L for the day."""
+        trades: dict[str, int] = {}
+        for f in self.fills:
+            trades[f.strategy_id] = trades.get(f.strategy_id, 0) + 1
+        out: dict[str, dict[str, float]] = {}
+        for sid, pnl in self.positions.pnl_by_strategy().items():
+            out[sid] = {
+                "gross": pnl.gross,
+                "charges": pnl.charges,
+                "net": pnl.net,
+                "realized": pnl.realized,
+                "unrealized": pnl.unrealized,
+                "trades": float(trades.get(sid, 0)),
+            }
+        total = self.positions.pnl()
+        out["__account__"] = {
+            "gross": total.gross,
+            "charges": total.charges,
+            "net": total.net,
+            "realized": total.realized,
+            "unrealized": total.unrealized,
+            "trades": float(len(self.fills)),
+        }
+        return out
 
     def reset_kill_switch(self) -> None:
         """Strategies stay stopped; a human starts them again."""
