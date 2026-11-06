@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     admin_token: SecretStr = SecretStr("")
     kite_api_key: str = ""
     kite_api_secret: SecretStr = SecretStr("")
+    # Optional but recommended: reject Kite logins from any other account.
+    kite_user_id: str = ""
     # Where /auth/callback sends the browser after a successful Kite login.
     frontend_url: str = "http://localhost:5173"
     # CORS: the only origin allowed to call the API from a browser.
