@@ -42,6 +42,7 @@ from app.core.models import (
 from app.data.instruments import InstrumentStore, weekdays_until
 from app.data.option_chain import OptionChainService
 from app.engine.candles import CandleAggregator
+from app.engine.charges import NoCharges
 from app.engine.legs import LegGroup, LegGroupManager, LegSpec
 from app.engine.positions import Position, PositionBook, PositionKey
 from app.engine.smart_orders import Chaser, OptionOrderRules
@@ -57,6 +58,10 @@ from app.strategies.base import Strategy
 log = logging.getLogger(__name__)
 
 SYSTEM = "__system__"
+
+
+class ChargeModel(Protocol):
+    def for_fill(self, fill: Fill) -> float: ...
 
 
 class OrderJournal(Protocol):
@@ -208,6 +213,7 @@ class TradingEngine:
         wall_clock: Clock | None = None,
         journal: OrderJournal | None = None,
         margin: MarginChecker | None = None,
+        charges: ChargeModel | None = None,
     ) -> None:
         self.instruments = instruments
         self.feed = feed
@@ -220,6 +226,8 @@ class TradingEngine:
         self._wall_clock = wall_clock
         self.journal: OrderJournal = journal or NullJournal()
         self.margin = margin
+        self.charges: ChargeModel = charges or NoCharges()
+        self.fill_charges: dict[str, float] = {}
         self._unsent: set[str] = set()  # created, waiting for margin / not yet sent
         self.option_chain = OptionChainService(
             instruments, self.last_tick, clock, self.config.risk_free_rate
@@ -328,8 +336,10 @@ class TradingEngine:
         # Positions update immediately so the next risk check sees them (a paper
         # fill can happen inside submit()). Only strategy callbacks are deferred.
         self.fills.append(fill)
-        self.positions.apply_fill(fill)
-        self.journal.record_fill(fill)
+        cost = self.charges.for_fill(fill)
+        self.fill_charges[fill.fill_id] = cost
+        self.positions.apply_fill(fill, cost)
+        self.journal.record_fill(fill, cost)
         key = (fill.strategy_id, fill.instrument.token, fill.product)
         self._post(lambda: self._handle_fill(fill))
         self._post(lambda: self.stops.on_position_change(key))
@@ -429,6 +439,12 @@ class TradingEngine:
             self.alert(
                 f"Exiting {inst.tradingsymbol} before expiry (physical settlement)", "warning"
             )
+
+    def advance_to(self, now: datetime) -> None:
+        """Move market time forward (never back) and run time-based actions."""
+        if now > self.clock.now():
+            self.clock.set(now)
+        self._on_time(self.clock.now())
 
     def scheduled_square_off(self) -> None:
         """Daily MIS square-off. Idempotent per day (engine timer and scheduler both call it)."""
