@@ -55,6 +55,14 @@ Engine invariants (keep these when changing the engine):
 - Market time comes from tick timestamps. In realtime mode a 1s wall-clock timer also advances it.
 - The scheduled square-off closes **MIS only** (NRML carries). The kill switch and manual square-off close everything, each using the position's own product.
 - Kill switch: stops all strategies, cancels open orders and squares off. Reset keeps strategies stopped.
+- Executor callbacks that arrive outside a dispatch (live updates from background tasks) are pumped immediately. Callbacks that arrive while a strategy hook runs wait for the end of that dispatch (`_hook_depth`).
+- Accepted orders are journaled as PENDING **before** reaching the executor. The journal only enqueues (it never blocks); a background writer retries with backoff and alerts at most once a minute.
+
+Live execution and recovery:
+- `LiveExecutor` matches Kite updates by `tag`, then by `order_id`. Partial fills become incremental fills, `px = (avg_new*q_new - avg_old*q_old)/(q_new - q_old)`, with ids `{order_id}-{cumulative_qty}` (idempotent). If `average_price` is 0 it waits for a later update or the reconciliation.
+- `BrokerError.outcome_unknown` (timeouts, network, 5xx): never retry. The order stays PENDING and the 20s reconciliation finds it by tag, or marks it REJECTED after 60s.
+- Startup recovery (`engine/recovery.py`) replays today's fills, carried NRML fills (P&L zeroed) and open orders. Live also compares with `kite.positions()`/`kite.orders()`. Any mismatch, or a recovery that can't run (e.g. DB down), calls `engine.block()`: no strategy can start until `POST /recovery/resolve` (admin, `confirm: "RESOLVE"`).
+- Session expiry (06:00 job, or a TokenException): stop the engine, flush the journal, then SIGTERM self so Docker restarts a fresh process. The Twisted reactor can't restart.
 
 ```
 backend/app/
