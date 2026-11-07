@@ -135,6 +135,10 @@ export const api = {
   squareOff: () => request<Status>("POST", "/square-off"),
   killSwitch: (reason: string) => request<KillSwitch>("POST", "/kill-switch", { body: { reason } }),
   resetKillSwitch: () => request<KillSwitch>("POST", "/kill-switch/reset"),
+  resolveRecovery: (adoptBrokerPositions: boolean) =>
+    request<Record<string, unknown>>("POST", "/recovery/resolve", {
+      body: { adopt_broker_positions: adoptBrokerPositions, confirm: "RESOLVE" },
+    }),
 
   settings: () => request<SettingsInfo>("GET", "/settings"),
   submitPlan: (plan: DailyPlan, confirm?: string) =>

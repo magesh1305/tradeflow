@@ -15,6 +15,8 @@ export interface Position {
   strategy_id: string;
   exchange: string;
   tradingsymbol: string;
+  label: string; // readable, e.g. "NIFTY 24000 Call · 10 Nov"
+  lot_size: number;
   instrument_token: number;
   product: string;
   quantity: number;
@@ -31,6 +33,8 @@ export interface Order {
   strategy_id: string;
   exchange: string;
   tradingsymbol: string;
+  label: string;
+  lot_size: number;
   side: "BUY" | "SELL";
   quantity: number;
   order_type: string;
@@ -56,6 +60,8 @@ export interface Fill {
   strategy_id: string;
   exchange: string;
   tradingsymbol: string;
+  label: string;
+  lot_size: number;
   side: "BUY" | "SELL";
   quantity: number;
   price: number;
@@ -65,9 +71,14 @@ export interface Fill {
   trading_date: string;
 }
 
+export type RiskLevel = "low" | "medium" | "high";
+
 export interface StrategySummary {
   id: string;
   strategy: string;
+  title: string; // plain-English name, e.g. "Trend follower"
+  summary: string;
+  risk_level: RiskLevel;
   state: StrategyState;
   error: string;
   pnl: Pnl;
@@ -93,6 +104,8 @@ export interface JsonSchema {
 }
 
 export interface StrategyDetail extends StrategySummary {
+  how_it_works: string[];
+  risk_note: string;
   params: Record<string, unknown>;
   params_schema: JsonSchema;
   positions: Position[];
@@ -294,7 +307,7 @@ export interface SettingsInfo {
   market_hours: boolean;
   loosen_confirmation: string;
   plan: DailyPlan;
-  strategies: { id: string; strategy: string; state: StrategyState; has_lots: boolean }[];
+  strategies: { id: string; strategy: string; state: StrategyState; has_lots: boolean; title?: string; risk_level?: RiskLevel }[];
 }
 
 export interface PlanResult {
