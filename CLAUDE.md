@@ -88,6 +88,14 @@ Control API (`app/api/`):
 - `POST /backtests` returns 202 straight away. The run happens in a separate process (`backtest/job.py`) so it can't delay the live event loop.
 - API response models live in `api/schemas.py`; the frontend types in `frontend/src/api/` mirror them.
 
+Frontend (`frontend/`):
+- Node 22 (matches Docker/CI). Use **npm 11** for installs: `npx -y npm@11.21.1 ci` (npm 10 crashes on this tree with "reading 'edgesOut'").
+- Every direct and transitive package must be at least 14 days old. Transitive versions that are too new are pinned in `package.json` `overrides` (with `name@^major` keys when two majors coexist). Re-run the age check after any dependency change.
+- The admin token lives in memory + sessionStorage only (`src/api/token.ts`), never localStorage. A 401 clears it.
+- All HTTP goes through `src/api/client.ts` (`api.*`). Live status comes from one WebSocket (`useStatusSocket`: exponential backoff, a 5s stale watchdog, no retry on close code 1008). While it's down, the app falls back to polling `/status` and shows DISCONNECTED.
+- The kill switch only fires after typing `KILL`; on phones it is pinned to the bottom bar.
+- The dev server proxies `/api` (prefix stripped) and `/ws` to `BACKEND_URL` (default `http://127.0.0.1:8000`); production nginx does the same.
+
 ```
 backend/app/
   config.py    settings, mode switch, safety latches (assert_safe)
