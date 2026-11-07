@@ -16,6 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Mode = Literal["paper", "live"]
 FeedSource = Literal["kite", "sim"]
+Storage = Literal["postgres", "memory"]
 
 MIN_ADMIN_TOKEN_LEN = 16
 
@@ -50,6 +51,9 @@ class Settings(BaseSettings):
 
     # --- infrastructure ---------------------------------------------------------
     redis_url: str = "redis://localhost:6379/0"
+    # postgres: the durable journal (required for live). memory: practice without a
+    # database (paper only); history, plans and backtest results are lost on exit.
+    storage: Storage = "postgres"
     database_url: str = "postgresql+asyncpg://tradeflow:tradeflow@localhost:5432/tradeflow"
     strategies_file: Path = Path("strategies.yaml")
     # Params changed from the dashboard (PUT /strategies/{id}/params) survive the
@@ -214,6 +218,8 @@ class Settings(BaseSettings):
             problems.append("FEED must be 'kite' (live trading on a simulated feed is refused)")
         if not self.kite_api_key or not self.kite_api_secret.get_secret_value():
             problems.append("KITE_API_KEY and KITE_API_SECRET must be set")
+        if self.storage != "postgres":
+            problems.append("STORAGE must be 'postgres' (live needs the durable order journal)")
         return problems
 
     def assert_safe(self) -> None:

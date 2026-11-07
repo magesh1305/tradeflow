@@ -42,6 +42,20 @@ def test_paper_ignores_missing_latches() -> None:
     make(mode="paper", feed="kite").assert_safe()
 
 
+def test_memory_storage_builds_without_a_database() -> None:
+    from app.backtest.store import MemoryBacktestStore  # noqa: PLC0415
+    from app.data.historical import MemoryHistoryStore  # noqa: PLC0415
+    from app.factory import build_runtime  # noqa: PLC0415
+    from app.storage.journal import MemoryJournalStore  # noqa: PLC0415
+    from app.storage.plans import MemoryPlanStore  # noqa: PLC0415
+
+    rt = build_runtime(make(storage="memory"), None)
+    assert isinstance(rt.journal.store, MemoryJournalStore)
+    assert isinstance(rt.plans, MemoryPlanStore)
+    assert isinstance(rt.history, MemoryHistoryStore)
+    assert isinstance(rt.backtests, MemoryBacktestStore)
+
+
 def test_live_with_all_latches_passes() -> None:
     s = live_ok()
     s.assert_safe()
@@ -58,6 +72,7 @@ def test_live_with_all_latches_passes() -> None:
         ({"feed": "sim"}, "FEED"),
         ({"kite_api_key": ""}, "KITE_API_KEY"),
         ({"kite_api_secret": ""}, "KITE_API_KEY"),
+        ({"storage": "memory"}, "STORAGE"),
     ],
 )
 def test_live_refuses_when_any_latch_missing(override: dict[str, Any], expected: str) -> None:

@@ -15,7 +15,7 @@ from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
 from app.core.models import Tick
 from app.core.ratelimit import RateLimiter
-from app.data.historical import SqlHistoryStore
+from app.data.historical import HistoryStore, MemoryHistoryStore, SqlHistoryStore
 from app.data.instruments import InstrumentStore
 from app.engine.charges import FnoCharges
 from app.engine.engine import EngineConfig, OrderJournal, TradingEngine
@@ -32,7 +32,7 @@ from app.notify.telegram import CompositeNotifier, TelegramNotifier
 from app.risk.manager import RiskLimits, RiskManager
 from app.risk.margin import EstimatedMargin, KiteMargin, MarginChecker
 from app.storage.db import make_engine, make_sessionmaker
-from app.storage.journal import Journal, SqlJournalStore
+from app.storage.journal import Journal, MemoryJournalStore, SqlJournalStore
 from app.strategies.registry import StrategyConfig, discover
 from app.strategies.registry import build as build_strategy
 
@@ -112,6 +112,8 @@ def build_notifier(settings: Settings) -> Notifier:
 
 
 def build_journal(settings: Settings, notifier: Notifier) -> Journal:
+    if settings.storage == "memory":
+        return Journal(MemoryJournalStore(), settings.mode, notifier)
     sessions = make_sessionmaker(make_engine(settings.database_url))
     return Journal(SqlJournalStore(sessions), settings.mode, notifier)
 
@@ -223,9 +225,13 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
     import signal  # noqa: PLC0415
 
     from app.backtest.job import ProcessBacktestExecutor  # noqa: PLC0415
-    from app.backtest.store import SqlBacktestStore  # noqa: PLC0415
+    from app.backtest.store import (  # noqa: PLC0415
+        BacktestStore,
+        MemoryBacktestStore,
+        SqlBacktestStore,
+    )
     from app.runtime import Runtime  # noqa: PLC0415 - runtime imports factory
-    from app.storage.plans import SqlPlanStore  # noqa: PLC0415
+    from app.storage.plans import MemoryPlanStore, PlanStore, SqlPlanStore  # noqa: PLC0415
 
     notifier = build_notifier(settings)
 
@@ -233,6 +239,13 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
         # Let uvicorn shut down gracefully; Docker's restart policy brings us back.
         os.kill(os.getpid(), signal.SIGTERM)
 
+    plans: PlanStore
+    backtests: BacktestStore
+    if settings.storage == "memory":
+        plans, backtests = MemoryPlanStore(), MemoryBacktestStore()
+    else:
+        plans = SqlPlanStore(make_sessionmaker(make_engine(settings.database_url)))
+        backtests = SqlBacktestStore(make_sessionmaker(make_engine(settings.database_url)))
     return Runtime(
         settings,
         notifier=notifier,
@@ -240,8 +253,8 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
         auth=auth,
         exit_process=exit_process if settings.exit_on_session_expiry else None,
         history=build_history_store(settings),
-        plans=SqlPlanStore(make_sessionmaker(make_engine(settings.database_url))),
-        backtests=SqlBacktestStore(make_sessionmaker(make_engine(settings.database_url))),
+        plans=plans,
+        backtests=backtests,
         backtest_executor=ProcessBacktestExecutor(settings),
     )
 
@@ -282,5 +295,7 @@ def build_backtest_engine(
     return engine
 
 
-def build_history_store(settings: Settings) -> SqlHistoryStore:
+def build_history_store(settings: Settings) -> HistoryStore:
+    if settings.storage == "memory":
+        return MemoryHistoryStore()
     return SqlHistoryStore(make_sessionmaker(make_engine(settings.database_url)))
