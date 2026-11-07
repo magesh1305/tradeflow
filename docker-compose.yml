@@ -1,6 +1,11 @@
-# Local / server stack. Secrets come from ./.env (see .env.example).
-# MODE and the live-trading latches are deliberately NOT set here: the backend
-# reads them from .env and defaults to paper mode.
+# tradeflow stack: TimescaleDB, Redis, backend (engine + API), dashboard (nginx).
+#
+# Secrets and settings come from ./.env (copy .env.example). MODE and the live
+# trading latches are deliberately NOT set here: the backend reads them from .env
+# and defaults to paper mode. Never put live-trading values in this file.
+#
+# Every port binds to 127.0.0.1. Reach the dashboard through an SSH tunnel or a TLS
+# reverse proxy (see README "Deployment"); never expose it unencrypted.
 
 services:
   postgres:
@@ -36,19 +41,33 @@ services:
 
   backend:
     build: ./backend
+    # The backend exits after the daily Kite session expiry (06:00 IST) and is
+    # restarted here: the KiteTicker reactor can only start once per process.
     restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tradeflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tradeflow}
       REDIS_URL: redis://redis:6379/0
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8000:8000" # direct API access for the CLI / debugging only
+    volumes:
+      - backendstate:/app/state
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    stop_grace_period: 30s # time to flush the order journal on shutdown
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8080}:80"
+    depends_on:
+      - backend
 
 volumes:
   pgdata:
   redisdata:
+  backendstate:
