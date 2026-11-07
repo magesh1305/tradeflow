@@ -270,7 +270,7 @@ async def test_submit_applies_limits_and_starts_enabled(tmp_path: Path) -> None:
 
 async def test_loosening_during_market_hours_needs_confirmation(tmp_path: Path) -> None:
     clock = ManualClock(MONDAY_0900)
-    rt = runtime(sim_settings(tmp_path), clock, MemoryPlanStore())
+    rt = runtime(sim_settings(tmp_path, daily_loss_limit=10_000), clock, MemoryPlanStore())
     await rt.startup()
     try:
         form, _ = await rt.plan_for_form()
@@ -425,3 +425,18 @@ async def test_settings_api_flow(api: tuple[httpx.AsyncClient, Runtime, ManualCl
     history = (await client.get("/settings/history", headers=H)).json()
     assert len(history) == 2 and history[0]["loosened"]
     assert (await client.get("/settings")).status_code == 401
+
+
+async def test_beginner_defaults_prefill_the_first_plan(tmp_path: Path) -> None:
+    rt = runtime(sim_settings(tmp_path), ManualClock(MONDAY_0900), MemoryPlanStore())
+    a = rt.default_plan().account
+    assert a.daily_loss_limit == 500
+    assert a.profit_target == 1500
+    assert a.max_trades_per_day == 1
+    assert a.max_lots_per_order == 1
+    assert a.trading_start.isoformat("minutes") == "09:15"
+    assert a.trading_end.isoformat("minutes") == "15:10"
+    unlimited = sim_settings(tmp_path, profit_target=0, max_trades_per_day=0)
+    off = runtime(unlimited, ManualClock(MONDAY_0900), MemoryPlanStore())
+    assert off.default_plan().account.profit_target is None
+    assert off.default_plan().account.max_trades_per_day is None

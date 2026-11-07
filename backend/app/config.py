@@ -71,10 +71,15 @@ class Settings(BaseSettings):
     session_expiry_time: time = time(6, 0)
 
     # --- risk limits ------------------------------------------------------------
-    max_lots_per_order: int = Field(default=10, ge=1)
+    # Conservative defaults for beginners: 1 lot, 1 trade a day, lose at most 500,
+    # stop new trades after a 1500 profit. They pre-fill the first daily plan.
+    max_lots_per_order: int = Field(default=1, ge=1)
     max_open_positions: int = Field(default=6, ge=1)
     max_orders_per_minute: int = Field(default=30, ge=1)
-    daily_loss_limit: float = Field(default=10_000.0, gt=0, description="INR, net of charges")
+    daily_loss_limit: float = Field(default=500.0, gt=0, description="INR, net of charges")
+    # Daily-plan defaults; 0 = no limit.
+    profit_target: float = Field(default=1_500.0, ge=0, description="INR, net; 0 = none")
+    max_trades_per_day: int = Field(default=1, ge=0, description="new entries; 0 = no limit")
     duplicate_order_window_sec: float = Field(default=2.0, ge=0)
 
     # --- Kite order handling ----------------------------------------------------

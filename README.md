@@ -324,6 +324,7 @@ default and a comment, is in [`.env.example`](.env.example).** The main groups:
 | Auth | `ADMIN_TOKEN`, `KITE_API_KEY`, `KITE_API_SECRET`, `KITE_USER_ID`, `FRONTEND_URL`, `FRONTEND_ORIGIN` | Token: 16+ random chars |
 | Hours | `MARKET_OPEN`, `MARKET_CLOSE`, `TRADING_START`, `TRADING_END`, `SQUARE_OFF_TIME`, `SESSION_EXPIRY_TIME` | IST; entries only inside the trading window |
 | Risk | `MAX_LOTS_PER_ORDER`, `MAX_OPEN_POSITIONS`, `MAX_ORDERS_PER_MINUTE`, `DAILY_LOSS_LIMIT`, `DUPLICATE_ORDER_WINDOW_SEC` | Daily loss is net of charges and trips the kill switch |
+| Daily plan defaults | `DAILY_LOSS_LIMIT` (500), `PROFIT_TARGET` (1500), `MAX_TRADES_PER_DAY` (1), `MAX_LOTS_PER_ORDER` (1), `TRADING_START`/`TRADING_END` (09:15/15:10) | Beginner-safe values that pre-fill the first plan; after that the Plan page starts from your last plan. 0 = no limit for profit target and trades. New trades stop at 15:10 because intraday trades close at `SQUARE_OFF_TIME` (15:15), before the 15:30 market close |
 | Kite orders | `MARKET_PROTECTION`, `ORDER_RATE_PER_SEC`, `ORDER_RATE_PER_MIN` | Rate stays below Kite's 10/sec |
 | Margin / paper | `MARGIN_CHECK_ENABLED`, `PAPER_CAPITAL`, `PAPER_MARGIN_PCT`, `PAPER_SLIPPAGE_TICKS` | Set `PAPER_CAPITAL` to your real capital |
 | F&O | `FREEZE_LIMITS`, `INDEX_UNDERLYINGS`, `RISK_FREE_RATE`, `OPTION_*`, `STOP_LIMIT_BUFFER_PCT`, `EXPIRY_NO_ENTRY_AFTER`, `PHYSICAL_SETTLEMENT_EXIT_*`, `LEG_GROUP_TIMEOUT_SEC` | Freeze limits change: verify |

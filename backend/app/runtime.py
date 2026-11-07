@@ -306,6 +306,8 @@ class Runtime:
         return DailyPlan(
             account=AccountPlan(
                 daily_loss_limit=s.daily_loss_limit,
+                profit_target=s.profit_target or None,
+                max_trades_per_day=s.max_trades_per_day or None,
                 max_open_positions=s.max_open_positions,
                 max_lots_per_order=s.max_lots_per_order,
                 trading_start=s.trading_start,

@@ -25,6 +25,8 @@ CLOSE = datetime(2025, 11, 3, 15, 30, tzinfo=IST)
 async def run_day(
     configs: list[StrategyConfig], seed: int, **overrides: Any
 ) -> tuple[TradingEngine, LogNotifier]:
+    # These tests exercise the engine over a whole day, not the beginner defaults.
+    overrides.setdefault("daily_loss_limit", 10_000)
     settings = Settings(_env_file=None, **overrides)  # defaults: paper, sim
     assert not settings.is_live
     universe = synthetic_nifty(DAY)
