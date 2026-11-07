@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { OptionQuote } from "../api/types";
 import { Term } from "../components/Term";
-import { Card, PageTitle, inputClass } from "../components/ui";
+import { Card, Notice, PageTitle, inputClass } from "../components/ui";
 import { num, qty } from "../lib/format";
 
 const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
@@ -33,6 +33,7 @@ export function OptionChainPage() {
     queryKey: ["chain", underlying, expiry, width],
     queryFn: () => api.optionChain(underlying, expiry || undefined, width),
     refetchInterval: 2000,
+    meta: { handlesErrors: true },
   });
   const c = q.data;
   const callHeads = heads.map((h, i) => <th key={`c${h}`} className={`px-2 text-right ${headClass[i] ?? ""}`}>{h}</th>);
@@ -67,8 +68,16 @@ export function OptionChainPage() {
         </>
       }
     >
-      {q.error && <p className="text-sm text-rose-600">{q.error.message}</p>}
-      {c?.note && <p className="mb-2 text-sm text-slate-500">{c.note}</p>}
+      {q.error && (
+        <div className="mb-3">
+          <Notice tone="warn">
+            {q.error instanceof ApiError && q.error.status === 404
+              ? `No option prices are available for ${underlying} in this setup. Try NIFTY.`
+              : q.error.message}
+          </Notice>
+        </div>
+      )}
+      {c?.note && <p className="mb-2 text-sm text-slate-500">Loading prices… this takes a few seconds.</p>}
       <div className="overflow-x-auto">
         <table className="w-full text-xs sm:text-sm">
           <thead>

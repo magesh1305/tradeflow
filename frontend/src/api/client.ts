@@ -47,6 +47,10 @@ export function buildUrl(path: string, query?: Query): string {
   return `${API_BASE}${path}${qs ? `?${qs}` : ""}`;
 }
 
+/** Shown when the backend can't be reached (not running, restarting, or the proxy can't connect). */
+export const SERVER_UNREACHABLE =
+  "Can't reach the trading server. It may be stopped or restarting. If you use one-click practice, double-click Start tradeflow.";
+
 function describe(detail: unknown): string {
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) {
@@ -81,11 +85,15 @@ export async function request<T>(
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ApiError(0, "backend unreachable");
+    throw new ApiError(0, SERVER_UNREACHABLE);
   }
   if (res.status === 401) {
     setToken(null); // wrong or rotated token: back to the login screen
     throw new ApiError(401, "invalid admin token");
+  }
+  if (res.status === 502 || res.status === 504) {
+    // The dev server / nginx answers these when the backend process is down.
+    throw new ApiError(res.status, SERVER_UNREACHABLE);
   }
   if (!res.ok) {
     let detail: unknown = res.statusText;

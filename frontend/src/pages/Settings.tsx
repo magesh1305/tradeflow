@@ -218,7 +218,8 @@ function ModeSwitch({ advanced, onChange }: { advanced: boolean; onChange: (v: b
 }
 
 function History() {
-  const q = useQuery({ queryKey: ["plan-history"], queryFn: api.planHistory, refetchInterval: 30_000 });
+  // History is a nice-to-have: if the database is down, just hide it.
+  const q = useQuery({ queryKey: ["plan-history"], queryFn: api.planHistory, refetchInterval: 30_000, meta: { handlesErrors: true } });
   const rows = q.data ?? [];
   if (rows.length === 0) return null;
   return (

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, buildUrl, request, wsUrl } from "./client";
+import { ApiError, SERVER_UNREACHABLE, api, buildUrl, request, wsUrl } from "./client";
 import { getToken, setToken } from "./token";
 
 function mockFetch(status: number, body: unknown, ok = status < 400) {
@@ -88,7 +88,13 @@ describe("request", () => {
 
   it("reports an unreachable backend as status 0", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
-    await expect(request("GET", "/status")).rejects.toMatchObject({ status: 0, message: "backend unreachable" });
+    await expect(request("GET", "/status")).rejects.toMatchObject({ status: 0, message: SERVER_UNREACHABLE });
+  });
+
+  it("explains a 502 from the proxy when the backend is down", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, statusText: "Bad Gateway",
+      json: () => Promise.reject(new Error("html")) }));
+    await expect(request("GET", "/status")).rejects.toMatchObject({ status: 502, message: SERVER_UNREACHABLE });
   });
 });
 

@@ -49,3 +49,21 @@ describe("Term", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 });
+
+describe("toasts", () => {
+  it("shows the same message only once in a short time", async () => {
+    const { ToastProvider, useToast } = await import("../app/toasts");
+    function Spam() {
+      const t = useToast();
+      return (
+        <button type="button" onClick={() => { t.push("server down", "error"); }}>
+          spam
+        </button>
+      );
+    }
+    const user = userEvent.setup();
+    render(<ToastProvider><Spam /></ToastProvider>);
+    for (let i = 0; i < 5; i++) await user.click(screen.getByRole("button", { name: "spam" }));
+    expect(screen.getAllByText("server down")).toHaveLength(1);
+  });
+});

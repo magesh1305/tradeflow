@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type ToastKind = "error" | "success" | "info";
 interface Toast {
@@ -13,14 +13,20 @@ interface ToastApi {
 
 const Ctx = createContext<ToastApi | null>(null);
 let nextId = 1;
+const REPEAT_QUIET_MS = 30_000; // the same message is shown at most once per 30 s
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const lastShown = useRef(new Map<string, number>());
   const dismiss = useCallback((id: number) => {
     setToasts((ts) => ts.filter((t) => t.id !== id));
   }, []);
   const push = useCallback(
     (text: string, kind: ToastKind = "info") => {
+      const now = Date.now();
+      const key = `${kind}:${text}`;
+      if (now - (lastShown.current.get(key) ?? -Infinity) < REPEAT_QUIET_MS) return;
+      lastShown.current.set(key, now);
       const id = nextId++;
       setToasts((ts) => [...ts.slice(-4), { id, kind, text }]);
       setTimeout(() => {

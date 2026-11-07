@@ -78,7 +78,7 @@ function RunForm() {
 }
 
 export function BacktestsPage() {
-  const q = useQuery({ queryKey: ["backtests"], queryFn: api.backtests, refetchInterval: 5000 });
+  const q = useQuery({ queryKey: ["backtests"], queryFn: api.backtests, refetchInterval: 5000, meta: { handlesErrors: true } });
   return (
     <div className="space-y-5">
       <PageTitle
@@ -87,6 +87,7 @@ export function BacktestsPage() {
       />
       <Notice tone="warn">Good past results don&apos;t promise future profit. Use tests to understand a robot, not to predict money.</Notice>
       <RunForm />
+      {q.error && <Notice tone="warn">{q.error.message}</Notice>}
       <Card title="Past tests">
         <DataTable<BacktestRun>
           rows={q.data ?? []}

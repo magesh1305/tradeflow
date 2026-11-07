@@ -17,7 +17,7 @@ import { StartPage } from "./pages/Start";
 import { StrategyPage, Strategies } from "./pages/Strategies";
 
 function message(e: unknown): string {
-  if (e instanceof ApiError) return e.status ? `${e.message} (${e.status})` : e.message;
+  if (e instanceof ApiError) return e.status === 500 ? `${e.message} (error 500)` : e.message;
   return e instanceof Error ? e.message : "Something went wrong";
 }
 
@@ -30,7 +30,13 @@ function useQueryClientWithToasts(): QueryClient {
       toast.push(message(e), "error");
     };
     return new QueryClient({
-      queryCache: new QueryCache({ onError }),
+      // Queries with meta.handlesErrors show the problem on their own page instead.
+      queryCache: new QueryCache({
+        onError: (e, query) => {
+          if (query.meta?.handlesErrors) return;
+          onError(e);
+        },
+      }),
       mutationCache: new MutationCache({
         // Mutations with meta.handlesErrors show their own feedback (e.g. Settings' 409 dialog).
         onError: (e, _vars, _ctx, mutation) => {
