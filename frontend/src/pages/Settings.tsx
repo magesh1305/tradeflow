@@ -1,12 +1,13 @@
 // The daily trading plan. Submit it every morning: no strategy starts until you do.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { ApiError, api } from "../api/client";
-import type { DailyPlan, SettingsInfo } from "../api/types";
+import { api } from "../api/client";
+import type { SettingsInfo } from "../api/types";
 import { useToast } from "../app/toasts";
-import { Dialog } from "../components/Dialog";
 import { Icon } from "../components/Icon";
+import { usePlanSubmit } from "../components/PlanSubmit";
+import { SimplePlan } from "../components/SimplePlan";
 import { Term } from "../components/Term";
 import { Button, Card, Notice, PageTitle, Pill, RiskBadge, inputClass } from "../components/ui";
 import { istDateTime, istTime } from "../lib/format";
@@ -109,34 +110,8 @@ function StrategyCard({ id, info, value, onChange }: {
 
 function PlanEditor({ info }: { info: SettingsInfo }) {
   const [form, setForm] = useState<PlanForm>(() => toForm(info.plan));
-  const [loosen, setLoosen] = useState<{ plan: DailyPlan; items: string[] } | null>(null);
-  const [typed, setTyped] = useState("");
   const toast = useToast();
-  const qc = useQueryClient();
-  const submit = useMutation({
-    mutationFn: ({ plan, confirm }: { plan: DailyPlan; confirm?: string }) => api.submitPlan(plan, confirm),
-    meta: { handlesErrors: true },
-    onSuccess: (r) => {
-      setLoosen(null);
-      setTyped("");
-      toast.push(
-        [info.submitted ? "Plan updated" : "Today's plan submitted",
-          r.started.length ? `started: ${r.started.join(", ")}` : "",
-          r.stopped.length ? `stopped: ${r.stopped.join(", ")}` : ""].filter(Boolean).join(" · "),
-        "success",
-      );
-      for (const w of r.warnings) toast.push(w, "error");
-      void qc.invalidateQueries();
-    },
-    onError: (e, vars) => {
-      if (e instanceof ApiError && e.status === 409 && typeof e.detail === "object" && e.detail !== null
-        && "loosened" in e.detail) {
-        setLoosen({ plan: vars.plan, items: (e.detail as { loosened: string[] }).loosened });
-        return;
-      }
-      toast.push(e.message, "error");
-    },
-  });
+  const { submit, pending, dialog } = usePlanSubmit(info);
 
   const a = form.account;
   const setAccount = (k: keyof PlanForm["account"], v: string) => {
@@ -150,7 +125,7 @@ function PlanEditor({ info }: { info: SettingsInfo }) {
       onSubmit={(e) => {
         e.preventDefault();
         try {
-          submit.mutate({ plan: fromForm(form) });
+          submit(fromForm(form));
         } catch (err) {
           toast.push(err instanceof FormError ? err.message : "Invalid form", "error");
         }
@@ -199,8 +174,8 @@ function PlanEditor({ info }: { info: SettingsInfo }) {
       </Card>
 
       <div className="sticky bottom-20 z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur lg:bottom-3 dark:border-slate-800 dark:bg-slate-900/95">
-        <Button type="submit" variant="primary" className="min-h-11 px-6 text-base font-semibold" disabled={submit.isPending}>
-          {submit.isPending ? "Submitting…" : info.submitted ? "Update today's plan" : "Submit today's plan"}
+        <Button type="submit" variant="primary" className="min-h-11 px-6 text-base font-semibold" disabled={pending}>
+          {pending ? "Submitting…" : info.submitted ? "Update today's plan" : "Submit today's plan"}
         </Button>
         <span className="text-xs text-slate-500">
           Stricter limits apply at once.{info.market_hours ? " Making limits less strict during market hours needs a typed confirmation." : ""}
@@ -208,38 +183,37 @@ function PlanEditor({ info }: { info: SettingsInfo }) {
         </span>
       </div>
 
-      <Dialog open={loosen !== null} title="Loosen limits during market hours?" onClose={() => { setLoosen(null); setTyped(""); }}>
-        <p className="mb-2 text-sm text-slate-600 dark:text-slate-300">The market is open, and these limits become less strict (more risk):</p>
-        <ul className="mb-3 list-disc pl-5 text-sm">
-          {loosen?.items.map((i) => <li key={i}>{i}</li>)}
-        </ul>
-        <p className="mb-2 text-sm">
-          This change is recorded and an alert is sent. Type <strong>{info.loosen_confirmation}</strong> to confirm.
-        </p>
-        <input
-          aria-label="Type LOOSEN to confirm"
-          className={`${inputClass} mb-3 text-center font-bold tracking-widest`}
-          value={typed}
-          autoComplete="off"
-          onChange={(e) => {
-            setTyped(e.target.value.toUpperCase());
-          }}
-        />
-        <div className="flex gap-2">
-          <Button className="flex-1" onClick={() => { setLoosen(null); setTyped(""); }}>Cancel</Button>
-          <Button
-            variant="danger"
-            className="flex-1"
-            disabled={typed !== info.loosen_confirmation || submit.isPending}
-            onClick={() => {
-              if (loosen) submit.mutate({ plan: loosen.plan, confirm: info.loosen_confirmation });
-            }}
-          >
-            Loosen limits
-          </Button>
-        </div>
-      </Dialog>
+      {dialog}
     </form>
+  );
+}
+
+function ModeSwitch({ advanced, onChange }: { advanced: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div role="tablist" className="inline-flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+        {[
+          [false, "Simple"],
+          [true, "Advanced"],
+        ].map(([value, label]) => (
+          <button
+            key={String(label)}
+            type="button"
+            role="tab"
+            aria-selected={advanced === value}
+            onClick={() => { onChange(value as boolean); }}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+              advanced === value ? "bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white" : "text-slate-600 dark:text-slate-300"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className="text-sm text-slate-500 dark:text-slate-400">
+        {advanced ? "Every limit, for people who know what they mean." : "Just two questions. Everything else keeps its last value."}
+      </span>
+    </div>
   );
 }
 
@@ -265,6 +239,7 @@ function History() {
 export function SettingsPage() {
   const q = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const info = q.data;
+  const [advanced, setAdvanced] = useState(false);
   if (!info) return <p className="text-sm text-slate-500">{q.isLoading ? "Loading…" : "Unavailable."}</p>;
   return (
     <div className="space-y-5 pb-24 sm:pb-16">
@@ -278,8 +253,15 @@ export function SettingsPage() {
           ? `submitted${info.submitted_at ? ` at ${istDateTime(info.submitted_at)}` : ""}. Changes apply immediately.`
           : "not submitted yet. The boxes are filled in from your last plan. Check them and press Submit; no robot starts until you do."}
       </Notice>
-      {/* Re-mount the editor when the saved plan changes (after a submit). */}
-      <PlanEditor key={JSON.stringify(info.plan) + String(info.submitted)} info={info} />
+      <ModeSwitch advanced={advanced} onChange={setAdvanced} />
+      {/* Re-mount the editors when the saved plan changes (after a submit). */}
+      {advanced ? (
+        <PlanEditor key={JSON.stringify(info.plan) + String(info.submitted)} info={info} />
+      ) : (
+        <Card>
+          <SimplePlan key={JSON.stringify(info.plan) + String(info.submitted)} info={info} />
+        </Card>
+      )}
       <History />
     </div>
   );

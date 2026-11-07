@@ -7,6 +7,7 @@ import { Icon, type IconName } from "../components/Icon";
 import { PageTitle } from "../components/ui";
 
 const ITEMS: { to: string; icon: IconName; title: string; text: string }[] = [
+  { to: "/start", icon: "play", title: "Start here", text: "Step-by-step first setup" },
   { to: "/history", icon: "chart", title: "Profit history", text: "How each day went" },
   { to: "/option-chain", icon: "table", title: "Option prices", text: "Live Call and Put prices" },
   { to: "/backtests", icon: "flask", title: "Test on past data", text: "Try a robot on old prices" },

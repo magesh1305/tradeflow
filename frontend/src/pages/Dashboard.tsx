@@ -1,8 +1,8 @@
 // Home: is everything ready, how much did we make today, and what are the robots doing.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Position, Status } from "../api/types";
 import { useLive } from "../app/live";
@@ -13,6 +13,7 @@ import { ResolveBlock } from "../components/ResolveBlock";
 import { Term } from "../components/Term";
 import { Button, Card, Empty, Money, Notice, Pill, RiskBadge } from "../components/ui";
 import { istDateTime, istTime, num, todayIst } from "../lib/format";
+import { startGuideSeen } from "../lib/onboarding";
 import { directionWord, lotsText, productWord, robotNames, sideVerb } from "../lib/words";
 
 function Step({ done, title, children, action }: {
@@ -47,7 +48,12 @@ function Checklist({ status }: { status: Status }) {
   const kiteOk = a ? !a.configured || a.logged_in : false;
   const running = status.strategies.filter((s) => s.state === "RUNNING").length;
   return (
-    <Card title="Get ready for today" subtitle="Three steps every morning before 9:15 AM." icon="sun">
+    <Card
+      title="Get ready for today"
+      subtitle="Three steps every morning before 9:15 AM."
+      icon="sun"
+      actions={<Link to="/start" className="text-sm font-medium text-brand-600 hover:underline dark:text-brand-200">Guided setup</Link>}
+    >
       <ol className="divide-y divide-slate-100 dark:divide-slate-800">
         <Step
           done={kiteOk}
@@ -231,6 +237,11 @@ function Happening({ status }: { status: Status }) {
 
 export function Dashboard() {
   const { status } = useLive();
+  const navigate = useNavigate();
+  // First visit in this browser: open the Start here guide.
+  useEffect(() => {
+    if (!startGuideSeen()) void navigate("/start", { replace: true });
+  }, [navigate]);
   if (!status) return <Empty icon="clock">Connecting to the trading engine…</Empty>;
   const name = robotNames(status.strategies);
   return (

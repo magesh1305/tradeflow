@@ -14,6 +14,7 @@ interface NavItem {
 
 // Every screen, in the order a new user meets them.
 const NAV: NavItem[] = [
+  { to: "/start", label: "Start here", icon: "play" },
   { to: "/", label: "Home", icon: "home" },
   { to: "/plan", label: "Today's plan", icon: "plan" },
   { to: "/robots", label: "Robots", icon: "robot" },

@@ -13,6 +13,7 @@ import { HelpPage } from "./pages/Help";
 import { MorePage } from "./pages/More";
 import { ActivityPage, DailyPnlPage, RiskPage } from "./pages/Reports";
 import { SettingsPage } from "./pages/Settings";
+import { StartPage } from "./pages/Start";
 import { StrategyPage, Strategies } from "./pages/Strategies";
 
 function message(e: unknown): string {
@@ -80,6 +81,7 @@ function Routed() {
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
+            <Route path="start" element={<StartPage />} />
             <Route path="plan" element={<SettingsPage />} />
             <Route path="robots" element={<Strategies />} />
             <Route path="robots/:id" element={<StrategyPage />} />
