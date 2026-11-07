@@ -106,6 +106,10 @@ class StrategyRunningError(RuntimeError):
     pass
 
 
+class PlanRequiredError(RuntimeError):
+    """No strategy may start until today's plan is submitted (Settings tab)."""
+
+
 @dataclass
 class StrategySlot:
     strategy: Strategy
@@ -129,6 +133,11 @@ class EngineConfig:
     )
     physical_settlement_exit_days: int = 1
     physical_settlement_exit_time: time = time(15, 0)
+    # Live/paper runtime: strategies can't start until today's plan is submitted.
+    # Backtests don't use it.
+    require_daily_plan: bool = False
+    # Margin estimate (fraction of notional) for per-strategy capital limits.
+    capital_margin_pct: float = 0.15
 
 
 class _Context:
@@ -245,6 +254,9 @@ class TradingEngine:
         self.stops = StopManager(self, self.config.stop_limit_buffer_pct)
         self.legs = LegGroupManager(self, self.config.leg_group_timeout_sec)
         self._settlement_exited: set[tuple[PositionKey, date]] = set()
+        self.plan_date: date | None = None  # trading date of the submitted daily plan
+        self._alerted_targets: set[tuple[date, str]] = set()
+        self.risk.estimator = self.estimate_margin
         # Set by crash recovery when our state disagrees with the broker. While set,
         # no strategy can start until a human resolves it through the API.
         self.blocked_reason = ""
@@ -287,6 +299,8 @@ class TradingEngine:
             log.critical(
                 "engine blocked; strategies not started", extra={"reason": self.blocked_reason}
             )
+        elif not self.plan_submitted:
+            log.warning("today's plan not submitted; strategies wait for it (Settings tab)")
         else:
             for sid in enabled or []:
                 self.start_strategy(sid)
@@ -490,6 +504,8 @@ class TradingEngine:
         slot = self.slots[strategy_id]
         if self.blocked_reason:
             raise EngineBlockedError(f"engine blocked: {self.blocked_reason}")
+        if not self.plan_submitted:
+            raise PlanRequiredError("submit today's plan in the Settings tab first")
         if self.risk.kill_switch.tripped:
             raise RuntimeError("kill switch is active; reset it before starting strategies")
         if slot.state is StrategyState.RUNNING:
@@ -746,10 +762,46 @@ class TradingEngine:
 
     # --- kill switch & P&L --------------------------------------------------------------------
 
+    @property
+    def plan_submitted(self) -> bool:
+        return not self.config.require_daily_plan or self.plan_date == self.clock.now().date()
+
+    def estimate_margin(self, inst: Instrument, side: Side, qty: int, price: float | None) -> float:
+        """Rough margin: long options their premium, futures and short options a
+        fraction of notional (strike for options)."""
+        tick = self.last_tick(inst.token)
+        px = price or (tick.ltp if tick else 0.0)
+        pct = self.config.capital_margin_pct
+        if inst.is_option:
+            return px * qty if side is Side.BUY else (inst.strike or px) * qty * pct
+        return px * qty * pct
+
     def check_pnl(self) -> None:
         pnl = self.positions.pnl()
         if self.risk.check_daily_loss(pnl.net):
             self._on_kill(self.risk.kill_switch.reason)
+            return
+        # Per-strategy loss limits: stop that strategy and exit its positions.
+        for sid, net, limit in self.risk.strategies_over_loss_limit():
+            slot = self.slots.get(sid)
+            if slot is not None and slot.state is StrategyState.RUNNING:
+                self.stop_strategy(sid, exit_positions=True)
+                slot.error = f"loss limit {limit:,.0f} hit (net {net:,.2f})"
+                self._alert(
+                    f"{sid} loss limit hit: net {net:,.2f} <= -{limit:,.0f}. "
+                    "Stopped and exiting its positions.",
+                    "critical",
+                )
+        # Profit targets: no new trades (enforced by the RiskManager); alert once a day.
+        today = self.clock.now().date()
+        for who in self.risk.profit_targets_reached():
+            if (today, who) not in self._alerted_targets:
+                self._alerted_targets.add((today, who))
+                self._alert(
+                    f"Profit target reached ({who}): no new trades today; "
+                    "open positions keep running with their stops and exits.",
+                    "warning",
+                )
 
     def trip_kill_switch(self, reason: str) -> None:
         if self.risk.kill_switch.trip(reason, self.clock.now()):
