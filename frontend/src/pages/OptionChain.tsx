@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../api/client";
 import type { OptionQuote } from "../api/types";
-import { Card, inputClass } from "../components/ui";
+import { Term } from "../components/Term";
+import { Card, PageTitle, inputClass } from "../components/ui";
 import { num, qty } from "../lib/format";
 
 const UNDERLYINGS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"];
@@ -21,7 +22,7 @@ function Side({ q, reverse }: { q: OptionQuote | null; reverse: boolean }) {
   return <>{reverse ? cells.reverse() : cells}</>;
 }
 
-const heads = ["OI", "IV %", "Δ", "Θ", "Vega", "Γ", "Bid / Ask", "LTP"];
+const heads = ["Open contracts", "IV %", "Delta", "Theta", "Vega", "Gamma", "Buy / sell offers", "Price"];
 const headClass = ["", "", "", "hidden lg:table-cell", "hidden lg:table-cell", "hidden xl:table-cell", "hidden md:table-cell", ""];
 
 export function OptionChainPage() {
@@ -39,17 +40,28 @@ export function OptionChainPage() {
     <th key={`p${h}`} className={`px-2 text-right ${[...headClass].reverse()[i] ?? ""}`}>{h}</th>
   ));
   return (
+    <div className="space-y-5">
+    <PageTitle
+      title="Option prices"
+      subtitle={
+        <>
+          Live prices of <Term k="call">Call</Term> and <Term k="put">Put</Term> options at each NIFTY level. The highlighted row
+          is <Term k="atm">at the money</Term>, closest to today&apos;s price. You don&apos;t need this page to use the robots.
+        </>
+      }
+    />
     <Card
-      title={`Option chain${c?.spot ? ` · spot ${num(c.spot)}` : ""}`}
+      title={c?.spot ? `${underlying} is at ${num(c.spot)}` : underlying}
+      subtitle={<Term k="greeks">What do Delta, IV and the other columns mean?</Term>}
       actions={
         <>
           <select aria-label="Underlying" className={inputClass} value={underlying} onChange={(e) => { setUnderlying(e.target.value); setExpiry(""); }}>
             {UNDERLYINGS.map((u) => <option key={u}>{u}</option>)}
           </select>
-          <select aria-label="Expiry" className={inputClass} value={expiry || c?.expiry || ""} onChange={(e) => { setExpiry(e.target.value); }}>
+          <select aria-label="Expiry date" className={inputClass} value={expiry || c?.expiry || ""} onChange={(e) => { setExpiry(e.target.value); }}>
             {(c?.expiries ?? []).map((d) => <option key={d}>{d}</option>)}
           </select>
-          <select aria-label="Strikes" className={inputClass} value={width} onChange={(e) => { setWidth(Number(e.target.value)); }}>
+          <select aria-label="How many levels" className={inputClass} value={width} onChange={(e) => { setWidth(Number(e.target.value)); }}>
             {[5, 10, 15, 20].map((w) => <option key={w} value={w}>±{w}</option>)}
           </select>
         </>
@@ -61,13 +73,13 @@ export function OptionChainPage() {
         <table className="w-full text-xs sm:text-sm">
           <thead>
             <tr className="text-slate-500">
-              <th colSpan={8} className="py-1 text-center">CALLS</th>
+              <th colSpan={8} className="py-1 text-center">CALLS (gain when NIFTY rises)</th>
               <th />
-              <th colSpan={8} className="py-1 text-center">PUTS</th>
+              <th colSpan={8} className="py-1 text-center">PUTS (gain when NIFTY falls)</th>
             </tr>
             <tr className="border-b border-slate-200 text-slate-500 dark:border-slate-800">
               {callHeads}
-              <th className="px-3 text-center">Strike</th>
+              <th className="px-3 text-center">NIFTY level</th>
               {putHeads}
             </tr>
           </thead>
@@ -87,5 +99,6 @@ export function OptionChainPage() {
         </table>
       </div>
     </Card>
+    </div>
   );
 }

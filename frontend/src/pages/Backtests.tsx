@@ -6,7 +6,8 @@ import type { BacktestInput, BacktestRun, MissingData } from "../api/types";
 import { useToast } from "../app/toasts";
 import { EquityChart } from "../components/Charts";
 import { DataTable } from "../components/DataTable";
-import { Button, Card, Pill, Stat, inputClass } from "../components/ui";
+import { Term } from "../components/Term";
+import { Button, Card, Notice, PageTitle, Pill, Stat, inputClass } from "../components/ui";
 import { inr, istDateTime, num, pnlClass, todayIst } from "../lib/format";
 
 function RunForm() {
@@ -28,13 +29,13 @@ function RunForm() {
   const run = useMutation({
     mutationFn: api.runBacktest,
     onSuccess: (r) => {
-      toast.push(`Backtest #${r.id} started`, "success");
+      toast.push(`Test #${r.id} started`, "success");
       void qc.invalidateQueries({ queryKey: ["backtests"] });
       void navigate(`/backtests/${r.id}`);
     },
   });
   return (
-    <Card title="Run a backtest">
+    <Card title="Start a new test" subtitle="Pick a robot and a date range. It replays those days using saved prices." icon="flask">
       <form
         className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
         onSubmit={(e) => {
@@ -45,29 +46,29 @@ function RunForm() {
             setParamsError("");
             run.mutate({ ...form, params: params as Record<string, unknown> });
           } catch {
-            setParamsError("Params must be a JSON object");
+            setParamsError('Custom settings must look like {"lots": 1}');
           }
         }}
       >
-        <label className="text-xs">Strategy
+        <label className="text-sm">Robot
           <input list="strategy-types" className={inputClass} value={form.strategy} onChange={(e) => { setForm({ ...form, strategy: e.target.value }); }} />
           <datalist id="strategy-types">{types.map((t) => <option key={t} value={t} />)}</datalist>
         </label>
-        <label className="text-xs">From
+        <label className="text-sm">From
           <input type="date" className={inputClass} value={form.start} onChange={(e) => { setForm({ ...form, start: e.target.value }); }} />
         </label>
-        <label className="text-xs">To
+        <label className="text-sm">To
           <input type="date" className={inputClass} value={form.end} onChange={(e) => { setForm({ ...form, end: e.target.value }); }} />
         </label>
-        <label className="text-xs">Candles
+        <label className="text-sm">Price step
           <select className={inputClass} value={form.interval} onChange={(e) => { setForm({ ...form, interval: e.target.value as BacktestInput["interval"] }); }}>
             {["minute", "3minute", "5minute", "15minute", "60minute"].map((i) => <option key={i}>{i}</option>)}
           </select>
         </label>
         <div className="flex items-end">
-          <Button type="submit" variant="primary" className="w-full" disabled={run.isPending}>Run</Button>
+          <Button type="submit" variant="primary" className="w-full" disabled={run.isPending}>Run test</Button>
         </div>
-        <label className="text-xs sm:col-span-2 lg:col-span-5">Params (JSON)
+        <label className="text-sm sm:col-span-2 lg:col-span-5">Custom settings (advanced; leave {"{}"} for the defaults)
           <textarea rows={2} className={`${inputClass} font-mono`} value={paramsText} onChange={(e) => { setParamsText(e.target.value); }} />
           {paramsError && <span className="text-rose-600">{paramsError}</span>}
         </label>
@@ -79,21 +80,26 @@ function RunForm() {
 export function BacktestsPage() {
   const q = useQuery({ queryKey: ["backtests"], queryFn: api.backtests, refetchInterval: 5000 });
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      <PageTitle
+        title="Test on past data"
+        subtitle={<>See how a robot would have done on earlier days (a <Term k="backtest">backtest</Term>). Charges are included.</>}
+      />
+      <Notice tone="warn">Good past results don&apos;t promise future profit. Use tests to understand a robot, not to predict money.</Notice>
       <RunForm />
-      <Card title="Runs">
+      <Card title="Past tests">
         <DataTable<BacktestRun>
           rows={q.data ?? []}
           rowKey={(r) => String(r.id)}
-          empty={q.isLoading ? "Loading…" : "No backtests yet."}
+          empty={q.isLoading ? "Loading…" : "No tests yet. Start one above."}
           columns={[
             { key: "id", header: "#", render: (r) => <Link className="text-sky-700 hover:underline dark:text-sky-400" to={String(r.id)}>{r.id}</Link> },
-            { key: "s", header: "Strategy", render: (r) => r.strategy },
-            { key: "range", header: "Range", render: (r) => `${r.start_date} → ${r.end_date}` },
+            { key: "s", header: "Robot", render: (r) => r.strategy },
+            { key: "range", header: "Days", render: (r) => `${r.start_date} → ${r.end_date}` },
             { key: "st", header: "Status", render: (r) => <Pill value={r.status} /> },
-            { key: "net", header: "Net", align: "right", render: (r) => (r.metrics ? <span className={pnlClass(r.metrics.net_pnl)}>{inr(r.metrics.net_pnl)}</span> : "—") },
+            { key: "net", header: "After charges", align: "right", render: (r) => (r.metrics ? <span className={pnlClass(r.metrics.net_pnl)}>{inr(r.metrics.net_pnl)}</span> : "—") },
             { key: "tr", header: "Trades", align: "right", render: (r) => r.metrics?.trades ?? "—" },
-            { key: "at", header: "Created", render: (r) => istDateTime(r.created_at) },
+            { key: "at", header: "Started", render: (r) => istDateTime(r.created_at) },
           ]}
         />
       </Card>
@@ -112,38 +118,38 @@ export function BacktestPage() {
   if (!r) return <p className="text-sm text-slate-500">{q.isLoading ? "Loading…" : "Not found."}</p>;
   const m = r.metrics;
   return (
-    <div className="space-y-4">
-      <Card title={<span className="flex items-center gap-2 normal-case">Backtest #{r.id} · {r.strategy} <Pill value={r.status} /></span>}>
+    <div className="space-y-5">
+      <Card title={<span className="flex items-center gap-2 normal-case">Test #{r.id} · {r.strategy} <Pill value={r.status} /></span>}>
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          {r.start_date} → {r.end_date} · params <code className="text-xs">{JSON.stringify(r.params)}</code>
+          {r.start_date} → {r.end_date} · settings <code className="text-xs">{JSON.stringify(r.params)}</code>
         </p>
         {r.error && <p role="alert" className="mt-2 text-sm text-rose-600">{r.error}</p>}
-        {r.status === "running" && <p className="mt-2 text-sm text-slate-500">Running…</p>}
+        {r.status === "running" && <p className="mt-2 text-sm text-slate-500">Running… this page updates by itself.</p>}
       </Card>
       {m && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-6">
-            <Stat label="Net P&L" value={m.net_pnl} />
-            <Stat label="Gross P&L" value={m.gross_pnl} />
+            <Stat label="Result after charges" value={m.net_pnl} />
+            <Stat label="Before charges" value={m.gross_pnl} />
             <Stat label="Charges" value={-m.charges} />
-            <Stat label="Max drawdown" value={-m.max_drawdown} />
-            <Stat label="Trades" value={m.trades} money={false} tone={false} />
-            <Stat label="Days" value={m.days} money={false} tone={false} />
+            <Stat label={<Term k="drawdown">Worst dip</Term>} value={-m.max_drawdown} />
+            <Stat label="Trades" value={m.trades} money={false} />
+            <Stat label="Days" value={m.days} money={false} />
           </div>
-          <Card title="Statistics">
+          <Card title="Details">
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm md:grid-cols-4">
-              <dt className="text-slate-500">Win rate</dt><dd>{m.win_rate === null ? "—" : `${num(m.win_rate)}%`}</dd>
-              <dt className="text-slate-500">Avg win</dt><dd>{inr(m.avg_win)}</dd>
-              <dt className="text-slate-500">Avg loss</dt><dd>{inr(m.avg_loss)}</dd>
-              <dt className="text-slate-500">Daily Sharpe</dt><dd>{num(m.sharpe)}</dd>
-              <dt className="text-slate-500">Max DD %</dt><dd>{num(m.max_drawdown_pct)}%</dd>
-              <dt className="text-slate-500">Fills</dt><dd>{m.fills}</dd>
+              <dt className="text-slate-500"><Term k="win_rate">Win rate</Term></dt><dd>{m.win_rate === null ? "—" : `${num(m.win_rate)}%`}</dd>
+              <dt className="text-slate-500">Average win</dt><dd>{inr(m.avg_win)}</dd>
+              <dt className="text-slate-500">Average loss</dt><dd>{inr(m.avg_loss)}</dd>
+              <dt className="text-slate-500">Steadiness (Sharpe)</dt><dd>{num(m.sharpe)}</dd>
+              <dt className="text-slate-500">Worst dip %</dt><dd>{num(m.max_drawdown_pct)}%</dd>
+              <dt className="text-slate-500">Orders filled</dt><dd>{m.fills}</dd>
             </dl>
             {(m.notes ?? []).length > 0 && (
               <ul className="mt-3 list-disc pl-5 text-xs text-slate-500">{m.notes?.map((n) => <li key={n}>{n}</li>)}</ul>
             )}
           </Card>
-          <Card title="Equity curve (net, cumulative)">
+          <Card title="Money over time" subtitle="Running total after charges, day by day.">
             {(r.equity_curve ?? []).length > 0 ? (
               <EquityChart points={(r.equity_curve ?? []).map((p) => ({ time: p.date, value: p.net }))} />
             ) : (

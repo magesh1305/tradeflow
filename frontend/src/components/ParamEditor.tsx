@@ -59,12 +59,13 @@ export function ParamEditor({ schema, params, disabled, onSave, saving }: {
         onSave(coerce(schema, values));
       }}
     >
-      <fieldset disabled={disabled} className="grid gap-3 sm:grid-cols-2">
+      <fieldset disabled={disabled} className="grid gap-4 sm:grid-cols-2">
         {props.map(([name, p]) => (
           <label key={name} className="text-sm">
-            <span className="mb-1 block text-slate-600 dark:text-slate-300">{p.title ?? name}</span>
+            <span className="mb-1 block font-medium text-slate-800 dark:text-slate-200">{p.title ?? name}</span>
             {p.type === "boolean" ? (
               <input
+                className="h-5 w-5"
                 type="checkbox"
                 checked={Boolean(values[name])}
                 onChange={(e) => {
@@ -84,14 +85,15 @@ export function ParamEditor({ schema, params, disabled, onSave, saving }: {
                 }}
               />
             )}
+            {p.description && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{p.description}</span>}
           </label>
         ))}
       </fieldset>
       <div className="mt-3 flex items-center gap-3">
         <Button type="submit" variant="primary" disabled={disabled || saving}>
-          {saving ? "Saving…" : "Save params"}
+          {saving ? "Saving…" : "Save settings"}
         </Button>
-        {disabled && <span className="text-xs text-slate-500">Stop the strategy to edit its params.</span>}
+        {disabled && <span className="text-xs text-slate-500">Stop the robot to change its settings.</span>}
       </div>
     </form>
   );

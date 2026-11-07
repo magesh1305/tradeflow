@@ -1,6 +1,6 @@
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useParams } from "react-router-dom";
 import { ApiError } from "./api/client";
 import { Layout } from "./app/Layout";
 import { LiveProvider, useAdminToken } from "./app/live";
@@ -9,7 +9,9 @@ import { BacktestPage, BacktestsPage } from "./pages/Backtests";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { OptionChainPage } from "./pages/OptionChain";
-import { DailyPnlPage, OrdersPage, RiskPage, TradesPage } from "./pages/Reports";
+import { HelpPage } from "./pages/Help";
+import { MorePage } from "./pages/More";
+import { ActivityPage, DailyPnlPage, RiskPage } from "./pages/Reports";
 import { SettingsPage } from "./pages/Settings";
 import { StrategyPage, Strategies } from "./pages/Strategies";
 
@@ -54,12 +56,17 @@ function KiteLoginNotice() {
     const url = new URL(window.location.href);
     const result = url.searchParams.get("kite_login");
     if (!result) return;
-    if (result === "success") toast.push("Kite login complete", "success");
-    else toast.push(`Kite login failed: ${url.searchParams.get("reason") ?? "unknown"}`, "error");
+    if (result === "success") toast.push("Connected to Zerodha for today", "success");
+    else toast.push(`Zerodha login failed: ${url.searchParams.get("reason") ?? "unknown"}`, "error");
     for (const k of ["kite_login", "reason", "user_id"]) url.searchParams.delete(k);
     window.history.replaceState(null, "", url.toString());
   }, [toast]);
   return null;
+}
+
+function OldRobot() {
+  const { id = "" } = useParams();
+  return <Navigate to={`/robots/${encodeURIComponent(id)}`} replace />;
 }
 
 function Routed() {
@@ -73,16 +80,25 @@ function Routed() {
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
-            <Route path="strategies" element={<Strategies />} />
-            <Route path="strategies/:id" element={<StrategyPage />} />
+            <Route path="plan" element={<SettingsPage />} />
+            <Route path="robots" element={<Strategies />} />
+            <Route path="robots/:id" element={<StrategyPage />} />
+            <Route path="activity" element={<ActivityPage />} />
+            <Route path="history" element={<DailyPnlPage />} />
             <Route path="option-chain" element={<OptionChainPage />} />
-            <Route path="orders" element={<OrdersPage />} />
-            <Route path="trades" element={<TradesPage />} />
-            <Route path="pnl" element={<DailyPnlPage />} />
             <Route path="backtests" element={<BacktestsPage />} />
             <Route path="backtests/:id" element={<BacktestPage />} />
-            <Route path="risk" element={<RiskPage />} />
-            <Route path="settings" element={<SettingsPage />} />
+            <Route path="safety" element={<RiskPage />} />
+            <Route path="help" element={<HelpPage />} />
+            <Route path="more" element={<MorePage />} />
+            {/* Old addresses keep working. */}
+            <Route path="settings" element={<Navigate to="/plan" replace />} />
+            <Route path="strategies" element={<Navigate to="/robots" replace />} />
+            <Route path="strategies/:id" element={<OldRobot />} />
+            <Route path="orders" element={<Navigate to="/activity?tab=orders" replace />} />
+            <Route path="trades" element={<Navigate to="/activity" replace />} />
+            <Route path="pnl" element={<Navigate to="/history" replace />} />
+            <Route path="risk" element={<Navigate to="/safety" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

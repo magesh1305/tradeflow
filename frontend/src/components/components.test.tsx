@@ -32,8 +32,8 @@ describe("KillSwitch", () => {
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
     render(wrap(<KillSwitch state={{ tripped: false, reason: "", tripped_at: null }} />));
-    await user.click(screen.getByRole("button", { name: "KILL SWITCH" }));
-    const confirm = screen.getByRole("button", { name: "Trip kill switch" });
+    await user.click(screen.getByRole("button", { name: "EMERGENCY STOP" }));
+    const confirm = screen.getByRole("button", { name: "Stop everything" });
     expect(confirm).toBeDisabled();
     await user.type(screen.getByLabelText("Type KILL to confirm"), "kil");
     expect(confirm).toBeDisabled();
@@ -47,18 +47,18 @@ describe("KillSwitch", () => {
 
   it("shows the active state with a reset button", () => {
     render(wrap(<KillSwitch state={{ tripped: true, reason: "daily loss", tripped_at: null }} />));
-    expect(screen.getByText("KILL SWITCH ACTIVE")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reset" })).toBeInTheDocument();
+    expect(screen.getByText("EMERGENCY STOP ON")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeInTheDocument();
   });
 });
 
 describe("ModeBadge", () => {
-  it("shows PAPER in blue and LIVE in red", () => {
+  it("shows practice mode in blue and real money in red", () => {
     const { rerender } = render(<ModeBadge mode="paper" />);
-    expect(screen.getByTestId("mode-badge")).toHaveTextContent("PAPER");
+    expect(screen.getByTestId("mode-badge")).toHaveTextContent("PRACTICE MODE");
     expect(screen.getByTestId("mode-badge").className).toContain("bg-blue-600");
     rerender(<ModeBadge mode="live" />);
-    expect(screen.getByTestId("mode-badge")).toHaveTextContent("LIVE");
+    expect(screen.getByTestId("mode-badge")).toHaveTextContent("REAL MONEY");
     expect(screen.getByTestId("mode-badge").className).toContain("bg-red-600");
   });
 });

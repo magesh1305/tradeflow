@@ -6,21 +6,23 @@ import { ApiError, api } from "../api/client";
 import type { DailyPlan, SettingsInfo } from "../api/types";
 import { useToast } from "../app/toasts";
 import { Dialog } from "../components/Dialog";
-import { Button, Card, Pill, inputClass } from "../components/ui";
+import { Icon } from "../components/Icon";
+import { Term } from "../components/Term";
+import { Button, Card, Notice, PageTitle, Pill, RiskBadge, inputClass } from "../components/ui";
 import { istDateTime, istTime } from "../lib/format";
 import { FormError, fromForm, toForm, type PlanForm, type StrategyForm } from "../lib/plan";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="text-sm">
-      <span className="mb-1 block text-slate-600 dark:text-slate-300">{label}</span>
+      <span className="mb-1 block font-medium text-slate-800 dark:text-slate-200">{label}</span>
       {children}
-      {hint && <span className="mt-0.5 block text-xs text-slate-500">{hint}</span>}
+      {hint && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{hint}</span>}
     </label>
   );
 }
 
-function NumberInput({ value, onChange, placeholder = "no limit", step = "any" }: {
+function NumberInput({ value, onChange, placeholder = "No limit", step = "any" }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
@@ -52,47 +54,52 @@ function StrategyCard({ id, info, value, onChange }: {
     onChange({ ...value, [k]: v });
   };
   return (
-    <div className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-      <div className="mb-3 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 font-semibold">
+    <div className={`rounded-xl border p-4 transition ${value.enabled ? "border-brand-200 bg-brand-50/30 dark:border-brand-500/30 dark:bg-brand-500/5" : "border-slate-200 dark:border-slate-800"}`}>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <label className="flex cursor-pointer items-center gap-3">
           <input
             type="checkbox"
-            className="h-5 w-5"
+            className="h-5 w-5 accent-brand-500"
             checked={value.enabled}
             onChange={(e) => {
               set("enabled", e.target.checked);
             }}
           />
-          {id}
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <Icon name="robot" />
+          </span>
+          <span className="font-semibold text-slate-900 dark:text-white">{info?.title || id}</span>
         </label>
-        {info && <span className="text-xs text-slate-500">{info.strategy}</span>}
+        {info?.risk_level && <RiskBadge level={info.risk_level} />}
         {info && <Pill value={info.state} />}
-        <span className="text-xs text-slate-500">{value.enabled ? "trades today" : "off today"}</span>
+        <span className={`ml-auto text-sm font-medium ${value.enabled ? "text-brand-700 dark:text-brand-200" : "text-slate-500"}`}>
+          {value.enabled ? "Trades today" : "Off today"}
+        </span>
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Field label="Lots per trade">
+      <div className={`grid grid-cols-2 gap-4 md:grid-cols-3 ${value.enabled ? "" : "opacity-60"}`}>
+        <Field label="Lots per trade" hint="Size of each trade.">
           <NumberInput
             value={value.lots}
             step="1"
-            placeholder={info?.has_lots === false ? "n/a" : "unchanged"}
+            placeholder={info?.has_lots === false ? "Not used" : "Keep current"}
             onChange={(v) => {
               set("lots", v);
             }}
           />
         </Field>
-        <Field label="Max trades / day">
+        <Field label="Most trades today" hint="Robot stops opening new trades after this.">
           <NumberInput value={value.max_trades_per_day} step="1" onChange={(v) => { set("max_trades_per_day", v); }} />
         </Field>
-        <Field label="Loss limit ₹" hint="hit: stop + exit">
+        <Field label="Loss limit for this robot ₹" hint="Reached: this robot stops and closes its trades.">
           <NumberInput value={value.loss_limit} onChange={(v) => { set("loss_limit", v); }} />
         </Field>
-        <Field label="Profit target ₹" hint="hit: no new trades">
+        <Field label="Profit target for this robot ₹" hint="Reached: no new trades for this robot.">
           <NumberInput value={value.profit_target} onChange={(v) => { set("profit_target", v); }} />
         </Field>
-        <Field label="Max lots / order">
+        <Field label="Most lots in one order">
           <NumberInput value={value.max_lots_per_order} step="1" onChange={(v) => { set("max_lots_per_order", v); }} />
         </Field>
-        <Field label="Max capital ₹" hint="margin estimate">
+        <Field label="Most money to use ₹" hint="Estimated money Zerodha blocks for its trades.">
           <NumberInput value={value.max_capital} onChange={(v) => { set("max_capital", v); }} />
         </Field>
       </div>
@@ -149,33 +156,33 @@ function PlanEditor({ info }: { info: SettingsInfo }) {
         }
       }}
     >
-      <Card title="Account limits">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Field label="Daily loss limit ₹" hint="hit: kill switch">
+      <Card title="Limits for the whole account" subtitle="These apply to all robots together." icon="shield">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+          <Field label="Daily loss limit ₹" hint="Reached: everything stops and all trades close. Example: 5000 means you can lose at most about ₹5,000 today.">
             <NumberInput value={a.daily_loss_limit} placeholder="required" onChange={(v) => { setAccount("daily_loss_limit", v); }} />
           </Field>
-          <Field label="Profit target ₹" hint="hit: no new trades">
+          <Field label="Profit target ₹" hint="Reached: no new trades today. Open trades keep running.">
             <NumberInput value={a.profit_target} onChange={(v) => { setAccount("profit_target", v); }} />
           </Field>
-          <Field label="Max trades / day" hint="new entries, all strategies">
+          <Field label="Most trades today" hint="New trades by all robots together.">
             <NumberInput value={a.max_trades_per_day} step="1" onChange={(v) => { setAccount("max_trades_per_day", v); }} />
           </Field>
-          <Field label="Max open positions">
+          <Field label="Most trades open at once">
             <NumberInput value={a.max_open_positions} step="1" placeholder="required" onChange={(v) => { setAccount("max_open_positions", v); }} />
           </Field>
-          <Field label="Max lots / order">
+          <Field label="Most lots in one order">
             <NumberInput value={a.max_lots_per_order} step="1" placeholder="required" onChange={(v) => { setAccount("max_lots_per_order", v); }} />
           </Field>
-          <Field label="New trades from">
+          <Field label="New trades from" hint="Market opens at 09:15.">
             <input className={inputClass} type="time" value={a.trading_start} onChange={(e) => { setAccount("trading_start", e.target.value); }} />
           </Field>
-          <Field label="New trades until">
+          <Field label="New trades until" hint="Closing trades is always allowed.">
             <input className={inputClass} type="time" value={a.trading_end} onChange={(e) => { setAccount("trading_end", e.target.value); }} />
           </Field>
         </div>
       </Card>
 
-      <Card title="Strategies">
+      <Card title="Robots" subtitle="Tick the robots that may trade today and set their limits. Empty boxes mean no extra limit." icon="robot">
         <div className="space-y-3">
           {Object.entries(form.strategies).map(([id, s]) => (
             <StrategyCard
@@ -191,23 +198,23 @@ function PlanEditor({ info }: { info: SettingsInfo }) {
         </div>
       </Card>
 
-      <div className="sticky bottom-16 z-20 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white/95 p-3 shadow sm:bottom-2 dark:border-slate-800 dark:bg-slate-900/95">
+      <div className="sticky bottom-20 z-20 flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg backdrop-blur lg:bottom-3 dark:border-slate-800 dark:bg-slate-900/95">
         <Button type="submit" variant="primary" className="min-h-11 px-6 text-base font-semibold" disabled={submit.isPending}>
           {submit.isPending ? "Submitting…" : info.submitted ? "Update today's plan" : "Submit today's plan"}
         </Button>
         <span className="text-xs text-slate-500">
-          Tightening applies instantly.{info.market_hours ? " Loosening during market hours needs confirmation." : ""}
-          {" "}Exits and stop losses are never blocked.
+          Stricter limits apply at once.{info.market_hours ? " Making limits less strict during market hours needs a typed confirmation." : ""}
+          {" "}Closing trades is never blocked.
         </span>
       </div>
 
       <Dialog open={loosen !== null} title="Loosen limits during market hours?" onClose={() => { setLoosen(null); setTyped(""); }}>
-        <p className="mb-2 text-sm text-slate-600 dark:text-slate-300">These limits become less strict:</p>
+        <p className="mb-2 text-sm text-slate-600 dark:text-slate-300">The market is open, and these limits become less strict (more risk):</p>
         <ul className="mb-3 list-disc pl-5 text-sm">
           {loosen?.items.map((i) => <li key={i}>{i}</li>)}
         </ul>
         <p className="mb-2 text-sm">
-          This is logged and sent as an alert. Type <strong>{info.loosen_confirmation}</strong> to confirm.
+          This change is recorded and an alert is sent. Type <strong>{info.loosen_confirmation}</strong> to confirm.
         </p>
         <input
           aria-label="Type LOOSEN to confirm"
@@ -241,12 +248,12 @@ function History() {
   const rows = q.data ?? [];
   if (rows.length === 0) return null;
   return (
-    <Card title="Today's changes">
+    <Card title="Changes made today" icon="clock">
       <ul className="space-y-2 text-sm">
         {rows.map((r) => (
           <li key={r.ts} className="border-b border-slate-100 pb-2 last:border-0 dark:border-slate-800">
             <span className="mr-2 font-mono text-xs text-slate-500">{istTime(r.ts)}</span>
-            {r.loosened.length > 0 && <span className="mr-2 rounded bg-rose-100 px-1.5 text-xs font-semibold text-rose-800 dark:bg-rose-900/50 dark:text-rose-200">LOOSENED</span>}
+            {r.loosened.length > 0 && <span className="mr-2 rounded bg-rose-100 px-1.5 text-xs font-semibold text-rose-800 dark:bg-rose-900/50 dark:text-rose-200">LESS STRICT</span>}
             {r.changes.join(" · ") || "no changes"}
           </li>
         ))}
@@ -260,18 +267,17 @@ export function SettingsPage() {
   const info = q.data;
   if (!info) return <p className="text-sm text-slate-500">{q.isLoading ? "Loading…" : "Unavailable."}</p>;
   return (
-    <div className="space-y-4 pb-24 sm:pb-16">
-      <div
-        role={info.submitted ? "status" : "alert"}
-        className={`rounded-lg border p-3 text-sm ${info.submitted
-          ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-100"
-          : "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100"}`}
-      >
+    <div className="space-y-5 pb-24 sm:pb-16">
+      <PageTitle
+        title="Today's plan"
+        subtitle={<>Decide every morning how much risk you accept today. Robots only trade after you submit this <Term k="plan">plan</Term>.</>}
+      />
+      <Notice tone={info.submitted ? "good" : "warn"}>
         <strong>Plan for {info.trading_date}: </strong>
         {info.submitted
           ? `submitted${info.submitted_at ? ` at ${istDateTime(info.submitted_at)}` : ""}. Changes apply immediately.`
-          : "not submitted yet. Review the values (pre-filled from your last plan) and submit; no strategy starts until you do."}
-      </div>
+          : "not submitted yet. The boxes are filled in from your last plan. Check them and press Submit; no robot starts until you do."}
+      </Notice>
       {/* Re-mount the editor when the saved plan changes (after a submit). */}
       <PlanEditor key={JSON.stringify(info.plan) + String(info.submitted)} info={info} />
       <History />
