@@ -33,3 +33,6 @@ backend/strategies.local.yaml
 .idea/
 .DS_Store
 Thumbs.db
+
+# one-click practice mode (password, logs)
+/.practice/
