@@ -13,14 +13,16 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app import factory
 from app.api import auth, control, recovery, ws
 from app.api import settings as plan_settings
 from app.config import get_settings
 from app.core.clock import now_ist
+from app.core.errors import DATABASE_DOWN, is_database_error
 from app.core.logging import configure_logging
 
 log = logging.getLogger(__name__)
@@ -90,6 +92,18 @@ def create_app() -> FastAPI:
     app.include_router(control.router)  # admin
     app.include_router(plan_settings.router)  # admin: the daily plan
     app.include_router(ws.router)  # token query param
+
+    @app.exception_handler(Exception)
+    async def unhandled(request: Request, exc: Exception) -> JSONResponse:
+        # Always answer with JSON the dashboard can show, never a bare 500 page.
+        if is_database_error(exc):
+            log.warning("database unavailable on %s %s: %s", request.method, request.url.path, exc)
+            return JSONResponse({"detail": DATABASE_DOWN}, status_code=503)
+        log.exception("unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            {"detail": "Unexpected server error. Details are in the backend log."},
+            status_code=500,
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:

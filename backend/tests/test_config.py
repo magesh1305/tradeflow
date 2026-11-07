@@ -56,6 +56,19 @@ def test_memory_storage_builds_without_a_database() -> None:
     assert isinstance(rt.backtests, MemoryBacktestStore)
 
 
+def test_memory_storage_refuses_backtests_clearly() -> None:
+    import asyncio  # noqa: PLC0415
+    from datetime import date  # noqa: PLC0415
+
+    from app.backtest.runner import BacktestRequest  # noqa: PLC0415
+    from app.factory import build_runtime  # noqa: PLC0415
+
+    rt = build_runtime(make(storage="memory"), None)
+    req = BacktestRequest("ema_crossover", {}, date(2026, 11, 2), date(2026, 11, 6), 60)
+    with pytest.raises(RuntimeError, match="one-click practice"):
+        asyncio.run(rt.submit_backtest(req))
+
+
 def test_live_with_all_latches_passes() -> None:
     s = live_ok()
     s.assert_safe()

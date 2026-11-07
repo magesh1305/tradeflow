@@ -30,6 +30,7 @@ from app.brokers.kite import KiteBroker
 from app.brokers.session import KiteAuth, KiteSession
 from app.config import Settings
 from app.core.clock import Clock, ManualClock, SystemClock
+from app.core.errors import is_database_error
 from app.data.historical import (
     HistoryDownloader,
     HistoryStore,
@@ -238,7 +239,13 @@ class Runtime:
                 )
         except Exception as exc:
             log.exception("crash recovery failed")
-            report = RecoveryReport(error=f"recovery could not run: {type(exc).__name__}: {exc}")
+            why = (
+                "the database is not reachable, so today's earlier orders and trades "
+                "could not be checked"
+                if is_database_error(exc)
+                else "the startup check failed"
+            )
+            report = RecoveryReport(error=f"{why} ({type(exc).__name__}: {exc})")
         if not report.ok:
             await self.notifier.send(
                 "RECOVERY MISMATCH - strategies disabled until resolved:\n"
@@ -491,6 +498,11 @@ class Runtime:
     async def submit_backtest(self, req: BacktestRequest) -> int:
         if self.backtests is None or self._backtest_executor is None:
             raise RuntimeError("backtests are not configured")
+        if self.settings.storage == "memory":
+            raise RuntimeError(
+                "Tests on past data need saved price history, which needs the full setup "
+                "with a database. They are not available in one-click practice mode."
+            )
         run_id = await self.backtests.create(req)
         store, executor = self.backtests, self._backtest_executor
 

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import RuntimeDep, require_admin
+from app.core.errors import DATABASE_DOWN, is_database_error
 from app.risk.plan import LOOSEN_CONFIRMATION, DailyPlan
 from app.runtime import PlanError, PlanLooseningError
 
@@ -110,5 +111,7 @@ async def plan_history(runtime: RuntimeDep, day: date | None = None) -> list[Pla
     try:
         rows = await runtime.plan_history(day)
     except Exception as exc:
-        raise HTTPException(503, f"plan history unavailable: {exc}") from exc
+        if is_database_error(exc):
+            raise HTTPException(503, DATABASE_DOWN) from exc
+        raise
     return [PlanEventOut(ts=r["ts"], changes=r["changes"], loosened=r["loosened"]) for r in rows]

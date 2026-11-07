@@ -110,7 +110,7 @@ async def test_recovery_failure_blocks_engine(tmp_path: Path) -> None:
     await rt.startup()
     try:
         assert rt.engine is not None
-        assert "recovery could not run" in rt.engine.blocked_reason
+        assert "database is not reachable" in rt.engine.blocked_reason
         assert rt.engine.slots["ema"].state.value == "STOPPED"
     finally:
         await rt.shutdown()
