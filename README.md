@@ -13,10 +13,17 @@ controls strategies and the kill switch.
 - [Architecture](#architecture)
 - [Local setup](#local-setup)
 - [Daily routine: Kite login](#daily-routine-kite-login)
+- [The dashboard](#the-dashboard)
+- [Example strategies](#example-strategies)
 - [Adding a strategy](#adding-a-strategy)
 - [Historical data and backtests](#historical-data-and-backtests)
+- [Configuration](#configuration)
+- [Control API](#control-api)
 - [Deployment (static IP)](#deployment-static-ip)
 - [Operations](#operations)
+- [Testing and CI](#testing-and-ci)
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
 - [Going-live checklist](#going-live-checklist)
 
 ## Architecture
@@ -112,6 +119,46 @@ Scheduled jobs (IST, weekdays): 08:45 instrument reload · 09:00 daily risk rese
 15:35 end-of-day P&L summary (database + Telegram) · 15:40 recording of 1-minute
 option candles around ATM.
 
+## The dashboard
+
+Log in with `ADMIN_TOKEN`. It is kept for the browser tab only (sessionStorage) and is
+cleared when the backend answers 401.
+
+| Page | What it shows / does |
+| --- | --- |
+| Header (every page) | **PAPER** (blue) or **LIVE** (red) badge, live/DISCONNECTED indicator, ENGINE BLOCKED warning, kill switch, dark/light toggle, log out |
+| Dashboard | Net, gross, realized, unrealized P&L and charges; Kite session with **Log in to Kite**; engine and feed state; open positions (with exchange-stop price); open orders; P&L per strategy; **Square off all** |
+| Strategies | State, errors, positions, P&L per instance. Detail page: **Start / Stop** (stop asks whether to exit positions) and a parameter form generated from the strategy's schema, editable only while stopped |
+| Option chain | Calls and puts around ATM: LTP, bid/ask, OI, IV, delta, theta, vega, gamma; ATM row highlighted; underlying, expiry and width selectors |
+| Orders / Trades | Filter by date range, strategy and mode; **Export CSV**. Trades show charges per fill |
+| Daily P&L | Bar chart and table of net P&L per day (today's row is live until the 15:35 summary) |
+| Backtests | Run form; list of runs; result page with metric cards, equity curve and a missing-data table |
+| Risk | Usage bars (daily loss, open positions, orders/minute), margin, kill-switch state, all limits |
+
+Status streams over one WebSocket (`/ws`) every second. If it drops, the header shows
+**DISCONNECTED: reconnecting**, the last known data stays on screen, and the page
+polls `/status` until the socket is back. On a phone the kill switch is pinned to the
+bottom of the screen. Every failed request shows an error toast.
+
+## Example strategies
+
+Both live in `backend/app/strategies/examples/` and are configured in
+`backend/strategies.yaml`.
+
+- **`ema_crossover`** (`ema_nifty_5m`, enabled): trades the nearest NIFTY future, long
+  when the fast EMA is above the slow EMA and short below, with no new entries after
+  `last_entry_time`. Params: `underlying`, `interval_minutes`, `fast`, `slow`, `lots`,
+  `last_entry_time`.
+- **`short_straddle`** (`straddle_nifty`, **disabled**: short options carry unlimited
+  risk): at `entry_time` it sells the ATM call and put of the nearest expiry as one leg
+  group (if either leg fails, the other is unwound). It protects each leg with an
+  exchange-side SL order at `stop_loss_pct` above the entry premium, plus the same stop
+  in code, and exits at `exit_time`. Params: `underlying`, `entry_time`, `exit_time`,
+  `lots`, `stop_loss_pct`, `exchange_stops`.
+
+These are examples of the framework, not trading advice. Backtest and paper-trade
+anything before using it.
+
 ## Adding a strategy
 
 1. Create `backend/app/strategies/examples/my_strategy.py` (any module in that package
@@ -200,6 +247,52 @@ docker compose exec backend python -m app.cli backtest \
   `EXCHANGE_TXN_*`, ... and `FREEZE_LIMITS`) against zerodha.com/charges and NSE
   circulars.
 
+## Configuration
+
+Everything is set through environment variables in `.env`. **Every setting, with its
+default and a comment, is in [`.env.example`](.env.example).** The main groups:
+
+| Group | Settings | Notes |
+| --- | --- | --- |
+| Mode | `MODE`, `FEED`, `LIVE_TRADING_CONFIRMED` | Defaults: `paper`, `sim`, `false` |
+| Auth | `ADMIN_TOKEN`, `KITE_API_KEY`, `KITE_API_SECRET`, `KITE_USER_ID`, `FRONTEND_URL`, `FRONTEND_ORIGIN` | Token: 16+ random chars |
+| Hours | `MARKET_OPEN`, `MARKET_CLOSE`, `TRADING_START`, `TRADING_END`, `SQUARE_OFF_TIME`, `SESSION_EXPIRY_TIME` | IST; entries only inside the trading window |
+| Risk | `MAX_LOTS_PER_ORDER`, `MAX_OPEN_POSITIONS`, `MAX_ORDERS_PER_MINUTE`, `DAILY_LOSS_LIMIT`, `DUPLICATE_ORDER_WINDOW_SEC` | Daily loss is net of charges and trips the kill switch |
+| Kite orders | `MARKET_PROTECTION`, `ORDER_RATE_PER_SEC`, `ORDER_RATE_PER_MIN` | Rate stays below Kite's 10/sec |
+| Margin / paper | `MARGIN_CHECK_ENABLED`, `PAPER_CAPITAL`, `PAPER_MARGIN_PCT`, `PAPER_SLIPPAGE_TICKS` | Set `PAPER_CAPITAL` to your real capital |
+| F&O | `FREEZE_LIMITS`, `INDEX_UNDERLYINGS`, `RISK_FREE_RATE`, `OPTION_*`, `STOP_LIMIT_BUFFER_PCT`, `EXPIRY_NO_ENTRY_AFTER`, `PHYSICAL_SETTLEMENT_EXIT_*`, `LEG_GROUP_TIMEOUT_SEC` | Freeze limits change: verify |
+| Charges | `BROKERAGE_*`, `STT_*`, `EXCHANGE_TXN_*`, `SEBI_FEE_PER_CRORE`, `IPFT_PER_CRORE`, `STAMP_*`, `GST_PCT` | Change over time: verify at zerodha.com/charges |
+| History | `HISTORY_CHUNK_DAYS`, `RECORD_UNDERLYINGS`, `RECORD_STRIKES_WIDTH`, `RECORD_EXPIRIES` | Chunk limits are not documented by Kite: verify |
+| Alerts | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Optional |
+| Infra / process | `POSTGRES_*`, `DATABASE_URL`, `REDIS_URL`, `STRATEGIES_FILE`, `STRATEGY_OVERRIDES_FILE`, `API_DOCS`, `ENGINE_AUTOSTART`, `EXIT_ON_SESSION_EXPIRY`, `LOG_LEVEL`, `LOG_JSON`, `DASHBOARD_BIND`, `DASHBOARD_PORT` | Compose sets the DB/Redis URLs and the overrides path itself |
+
+Restart the backend after changing `.env`: `docker compose up -d`.
+
+## Control API
+
+The backend listens on `127.0.0.1:8000`; the dashboard reaches it at `/api/...`.
+Everything except `/health` and `/auth/*` needs the header `X-Admin-Token: <ADMIN_TOKEN>`.
+Interactive docs are off unless `API_DOCS=true`, because they are unauthenticated.
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /health` | Liveness and mode (public) |
+| `GET /auth/login` · `GET /auth/callback` · `GET /auth/status` | Daily Kite login flow and session status (public) |
+| `GET /status` | Full snapshot: mode, feed, kill switch, P&L, positions, open orders, strategies |
+| `GET /strategies` · `GET /strategies/{id}` | List / detail (params, JSON schema, positions) |
+| `POST /strategies/{id}/start` | Start (409 while the kill switch is active or the engine is blocked) |
+| `POST /strategies/{id}/stop?exit_positions=true\|false` | Stop; optionally exit its positions |
+| `PUT /strategies/{id}/params` | Body `{"params": {...}}`; only while stopped; validated; saved across restarts |
+| `GET /orders` · `GET /fills` | Filters: `from`, `to` (YYYY-MM-DD), `strategy`, `mode`, `limit` |
+| `GET /pnl/daily` | Daily gross/charges/net per strategy and `__account__` (`from`, `to`, `strategy`, `mode`) |
+| `GET /risk` | Limits, today's usage, kill switch, margin |
+| `GET /option-chain/{underlying}?expiry=&width=` | Live chain with IV and Greeks (subscribes on demand) |
+| `POST /square-off` | Cancel open orders and exit all positions (MIS and NRML) |
+| `POST /kill-switch` · `POST /kill-switch/reset` | Body `{"reason": "..."}`; reset keeps strategies stopped |
+| `POST /backtests` · `GET /backtests` · `GET /backtests/{id}` | Body `{"strategy", "params", "start", "end", "interval"}`; runs in a separate process (202) |
+| `GET /recovery` · `POST /recovery/resolve` | Crash-recovery status; resolve with `{"confirm": "RESOLVE", "adopt_broker_positions": false}` |
+| `WS /ws?token=<ADMIN_TOKEN>` | Status snapshot every second (`{"type": "status", "data": {...}}`) |
+
 ## Deployment (static IP)
 
 Kite only accepts API **orders** from a static IP whitelisted in the developer
@@ -260,6 +353,60 @@ console (data and the WebSocket work from anywhere). Example on AWS, region
   redacted from access logs).
 - **Strategy params** changed on the dashboard are saved to the `backendstate` volume
   and survive the daily restart.
+
+## Testing and CI
+
+```bash
+# backend (from backend/): unit + simulated-day + API tests; Kite is fully mocked
+ruff check . && ruff format --check . && mypy app tests && pytest
+# integration tests need TimescaleDB:
+TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/tradeflow_test pytest
+
+# frontend (from frontend/)
+npm run lint && npm run typecheck && npm test && npm run build
+```
+
+Tests never touch Kite: `backend/tests/conftest.py` makes any real Kite HTTP call or
+WebSocket connection fail the test. GitHub Actions (`.github/workflows/ci.yml`)
+always runs with `MODE=paper FEED=sim` and has three jobs:
+
+- **backend:** ruff, mypy, pytest against TimescaleDB and Redis. It fails if any
+  integration test is skipped.
+- **frontend:** lint, typecheck, Vitest, production build.
+- **docker:** validate the compose file, build both images, start the whole stack
+  and smoke-test it through nginx (health, auth, live status, param persistence).
+
+Dependencies are pinned to exact versions at least 14 days old:
+`backend/requirements*.txt` + `constraints.txt`, `frontend/package.json` (with
+`overrides` for transitive packages), Docker image tags, and GitHub Actions commits.
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| Dashboard says **DISCONNECTED** | Backend down or restarting: `docker compose ps`, `docker compose logs backend` |
+| **ENGINE BLOCKED** banner | Crash recovery found a mismatch or couldn't reach the database. Fix it, then `POST /recovery/resolve` (see Operations) |
+| "Log in to Kite" fails | The redirect URL in the Kite console must equal `<dashboard origin>/api/auth/callback` exactly; `KITE_USER_ID` must match the account |
+| Live orders rejected with an IP error | The server's static IP isn't whitelisted in the Kite developer console |
+| Strategy won't start (409) | The kill switch is active (reset it) or the engine is blocked |
+| Option entries rejected for spread/volume | The strike is illiquid; adjust `OPTION_MAX_SPREAD_PCT` / `OPTION_MIN_VOLUME` or pick another strike |
+| Backtest shows missing data | Download it (`download-history`) or let the 15:40 recorder collect it; expired options can't be downloaded |
+| `npm install` crashes with "reading 'edgesOut'" | Use npm 11: `npx -y npm@11.21.1 ci` (Node 22) |
+| Backend exits every morning at 06:00 | Expected: the Kite token expired; Docker restarts it and it waits for your login |
+
+## Known limitations
+
+- Exchange holidays are not modelled. Scheduled jobs run on a holiday against an idle
+  market (harmless), and "trading days before expiry" counts weekdays only.
+- Backtests approximate the path inside each candle (O, L/H, C), and model neither
+  exercise/assignment STT at expiry nor queue position for limit orders.
+- The paper margin estimate is rough: no SPAN, no hedge benefit.
+- Kite is fully mocked in tests. The first paper session with `FEED=kite` is the
+  first contact with real Kite: watch order updates and fills closely.
+- Exchange-side stops are placed when a strategy calls `protect()` (the straddle
+  example does); they aren't added automatically for every option leg.
+- Charges, freeze limits and Kite's historical-request limits are configuration
+  values that change. Re-verify them periodically.
 
 ## Going-live checklist
 
