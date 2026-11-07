@@ -110,7 +110,10 @@ logs in once per trading day.
    other Kite account are rejected.
 2. **Each morning (before 09:15):** open the dashboard and click **Log in to Kite**.
    Kite redirects back and the engine starts with the day's session.
-3. At 06:00 the next day the backend stops cleanly, flushes the journal and exits.
+3. **Then open Settings and submit today's plan** (see [The dashboard](#the-dashboard)).
+   No strategy starts until you do. The form is pre-filled with your last plan, so
+   most days it's a review and one click.
+4. At 06:00 the next day the backend stops cleanly, flushes the journal and exits.
    Docker restarts it, and it waits for your next login. (KiteTicker's network
    reactor can only start once per process, so a fresh process is required.)
 
@@ -134,6 +137,35 @@ cleared when the backend answers 401.
 | Daily P&L | Bar chart and table of net P&L per day (today's row is live until the 15:35 summary) |
 | Backtests | Run form; list of runs; result page with metric cards, equity curve and a missing-data table |
 | Risk | Usage bars (daily loss, open positions, orders/minute), margin, kill-switch state, all limits |
+| **Settings** | **Today's trading plan**, submitted every morning (see below) |
+
+### Settings: the daily plan
+
+Every morning, review and submit the plan. **No strategy can start that day until you
+do.** The header shows **SUBMIT TODAY'S PLAN** until then.
+
+| Section | Field | What happens |
+| --- | --- | --- |
+| Account | Daily loss limit ₹ | Net loss reaches it: **kill switch** (everything stops and is squared off) |
+| | Profit target ₹ | Net profit reaches it: **no new trades** today; open positions keep running |
+| | Max trades / day | New entries across all strategies; exits never count |
+| | Max open positions, max lots per order | Hard caps on every new order |
+| | New trades from / until | The entry window (inside market hours, before square-off) |
+| Per strategy | On / off | On: starts when you submit. Off: a running strategy is stopped (positions kept) |
+| | Lots per trade | Sets the strategy's `lots` (stop the strategy to change it) |
+| | Max trades / day | New entries for that strategy; a multi-leg group counts as one |
+| | Loss limit ₹ | That strategy's net loss reaches it: **it stops and exits its positions**; others keep running |
+| | Profit target ₹ | That strategy stops taking new trades |
+| | Max lots / order, max capital ₹ | Caps per order and on the strategy's estimated margin |
+
+- Empty optional fields mean **no limit**.
+- The form is pre-filled from your last plan (or `.env` defaults the first time).
+- **Tightening** any limit applies instantly. **Loosening** a limit during market hours
+  (e.g. raising the loss limit after a loss) asks you to type `LOOSEN`; it's logged
+  and sent as a critical alert.
+- Exits, stop losses and square-offs are never blocked by these limits.
+- Every submission and change is stored (`daily_plans`, `plan_events`) and shown under
+  **Today's changes**. A restart during the day re-applies today's plan.
 
 Status streams over one WebSocket (`/ws`) every second. If it drops, the header shows
 **DISCONNECTED: reconnecting**, the last known data stays on screen, and the page
@@ -290,6 +322,7 @@ Interactive docs are off unless `API_DOCS=true`, because they are unauthenticate
 | `POST /square-off` | Cancel open orders and exit all positions (MIS and NRML) |
 | `POST /kill-switch` · `POST /kill-switch/reset` | Body `{"reason": "..."}`; reset keeps strategies stopped |
 | `POST /backtests` · `GET /backtests` · `GET /backtests/{id}` | Body `{"strategy", "params", "start", "end", "interval"}`; runs in a separate process (202) |
+| `GET /settings` · `POST /settings/plan` · `GET /settings/history` | Today's plan form; submit/update (`{"plan": {...}, "confirm": "LOOSEN"}` when loosening in market hours, else 409 lists what would loosen); audit trail |
 | `GET /recovery` · `POST /recovery/resolve` | Crash-recovery status; resolve with `{"confirm": "RESOLVE", "adopt_broker_positions": false}` |
 | `WS /ws?token=<ADMIN_TOKEN>` | Status snapshot every second (`{"type": "status", "data": {...}}`) |
 
@@ -388,7 +421,7 @@ Dependencies are pinned to exact versions at least 14 days old:
 | **ENGINE BLOCKED** banner | Crash recovery found a mismatch or couldn't reach the database. Fix it, then `POST /recovery/resolve` (see Operations) |
 | "Log in to Kite" fails | The redirect URL in the Kite console must equal `<dashboard origin>/api/auth/callback` exactly; `KITE_USER_ID` must match the account |
 | Live orders rejected with an IP error | The server's static IP isn't whitelisted in the Kite developer console |
-| Strategy won't start (409) | The kill switch is active (reset it) or the engine is blocked |
+| Strategy won't start (409) | Today's plan isn't submitted (Settings), the kill switch is active (reset it), or the engine is blocked |
 | Option entries rejected for spread/volume | The strike is illiquid; adjust `OPTION_MAX_SPREAD_PCT` / `OPTION_MIN_VOLUME` or pick another strike |
 | Backtest shows missing data | Download it (`download-history`) or let the 15:40 recorder collect it; expired options can't be downloaded |
 | `npm install` crashes with "reading 'edgesOut'" | Use npm 11: `npx -y npm@11.21.1 ci` (Node 22) |

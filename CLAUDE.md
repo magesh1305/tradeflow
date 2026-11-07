@@ -86,6 +86,8 @@ Control API (`app/api/`):
 - `/orders` and `/fills` merge the journal (history) with live engine state (today); `/pnl/daily` adds today's live row (`live: true`).
 - `PUT /strategies/{id}/params` only works while the strategy is stopped. Changes are validated and saved to `STRATEGY_OVERRIDES_FILE`, so they survive the daily restart.
 - `POST /backtests` returns 202 straight away. The run happens in a separate process (`backtest/job.py`) so it can't delay the live event loop.
+- Daily plan (`risk/plan.py`, `api/settings.py`, Settings tab): the runtime engine has `require_daily_plan=True`, so **no strategy starts until today's plan is submitted** (backtests don't need one). The plan sets account limits (`RiskManager.limits`) and `PlanLimits`: profit targets (no new entries), max trades/day (new entries; one leg group = one trade), per-strategy loss limit (stop + exit that strategy), max lots and max capital (margin estimate). Loosening during market hours needs `confirm: "LOOSEN"` (409 otherwise). Plans are stored in `daily_plans` + `plan_events` (migration 0003) and re-applied on restart.
+- Tests never read a developer's `.env` (`conftest.py` disables `env_file`).
 - API response models live in `api/schemas.py`; the frontend types in `frontend/src/api/` mirror them.
 
 Frontend (`frontend/`):
