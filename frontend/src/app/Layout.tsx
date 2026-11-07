@@ -15,6 +15,7 @@ const links = [
   ["/pnl", "Daily P&L"],
   ["/backtests", "Backtests"],
   ["/risk", "Risk"],
+  ["/settings", "Settings"],
 ] as const;
 
 function Connection() {
@@ -40,6 +41,14 @@ export function Layout() {
           <ModeBadge mode={status?.mode} />
           <span className="font-semibold">tradeflow</span>
           <Connection />
+          {status && !status.plan_submitted && (
+            <NavLink
+              to="/settings"
+              className="rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:bg-amber-900/60 dark:text-amber-100"
+            >
+              SUBMIT TODAY&apos;S PLAN
+            </NavLink>
+          )}
           {status?.blocked_reason && (
             <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800 dark:bg-red-900/60 dark:text-red-100" title={status.blocked_reason}>
               ENGINE BLOCKED

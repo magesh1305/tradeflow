@@ -118,6 +118,7 @@ export interface Status {
   strategies: StrategySummary[];
   open_leg_groups: number;
   journal: { backlog: number; failures: number; last_error: string };
+  plan_submitted: boolean;
 }
 
 export interface DailyPnl {
@@ -257,4 +258,56 @@ export interface ReportFilter {
   strategy?: string;
   mode?: Mode;
   limit?: number;
+}
+
+// --- daily plan (Settings tab); mirrors backend/app/risk/plan.py and api/settings.py ---
+
+export interface AccountPlan {
+  daily_loss_limit: number;
+  profit_target: number | null;
+  max_trades_per_day: number | null;
+  max_open_positions: number;
+  max_lots_per_order: number;
+  trading_start: string; // "HH:MM" or "HH:MM:SS"
+  trading_end: string;
+}
+
+export interface StrategyPlan {
+  enabled: boolean;
+  lots: number | null;
+  max_trades_per_day: number | null;
+  loss_limit: number | null;
+  profit_target: number | null;
+  max_lots_per_order: number | null;
+  max_capital: number | null;
+}
+
+export interface DailyPlan {
+  account: AccountPlan;
+  strategies: Record<string, StrategyPlan>;
+}
+
+export interface SettingsInfo {
+  trading_date: string;
+  submitted: boolean;
+  submitted_at: string | null;
+  market_hours: boolean;
+  loosen_confirmation: string;
+  plan: DailyPlan;
+  strategies: { id: string; strategy: string; state: StrategyState; has_lots: boolean }[];
+}
+
+export interface PlanResult {
+  plan: DailyPlan;
+  changes: string[];
+  loosened: string[];
+  started: string[];
+  stopped: string[];
+  warnings: string[];
+}
+
+export interface PlanEvent {
+  ts: string;
+  changes: string[];
+  loosened: string[];
 }

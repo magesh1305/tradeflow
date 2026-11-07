@@ -9,10 +9,14 @@ import type {
   DailyPnl,
   Fill,
   KillSwitch,
+  DailyPlan,
   OptionChain,
   Order,
+  PlanEvent,
+  PlanResult,
   ReportFilter,
   Risk,
+  SettingsInfo,
   Status,
   StrategyDetail,
   StrategySummary,
@@ -131,6 +135,11 @@ export const api = {
   squareOff: () => request<Status>("POST", "/square-off"),
   killSwitch: (reason: string) => request<KillSwitch>("POST", "/kill-switch", { body: { reason } }),
   resetKillSwitch: () => request<KillSwitch>("POST", "/kill-switch/reset"),
+
+  settings: () => request<SettingsInfo>("GET", "/settings"),
+  submitPlan: (plan: DailyPlan, confirm?: string) =>
+    request<PlanResult>("POST", "/settings/plan", { body: { plan, confirm } }),
+  planHistory: () => request<PlanEvent[]>("GET", "/settings/history"),
 
   backtests: () => request<BacktestRun[]>("GET", "/backtests"),
   backtest: (id: number) => request<BacktestDetail>("GET", `/backtests/${id}`),

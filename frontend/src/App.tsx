@@ -10,6 +10,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { OptionChainPage } from "./pages/OptionChain";
 import { DailyPnlPage, OrdersPage, RiskPage, TradesPage } from "./pages/Reports";
+import { SettingsPage } from "./pages/Settings";
 import { StrategyPage, Strategies } from "./pages/Strategies";
 
 function message(e: unknown): string {
@@ -27,7 +28,13 @@ function useQueryClientWithToasts(): QueryClient {
     };
     return new QueryClient({
       queryCache: new QueryCache({ onError }),
-      mutationCache: new MutationCache({ onError }),
+      mutationCache: new MutationCache({
+        // Mutations with meta.handlesErrors show their own feedback (e.g. Settings' 409 dialog).
+        onError: (e, _vars, _ctx, mutation) => {
+          if (mutation.meta?.handlesErrors) return;
+          onError(e);
+        },
+      }),
       defaultOptions: {
         queries: {
           retry: (n, e) => !(e instanceof ApiError && [401, 404, 422].includes(e.status)) && n < 2,
@@ -75,6 +82,7 @@ function Routed() {
             <Route path="backtests" element={<BacktestsPage />} />
             <Route path="backtests/:id" element={<BacktestPage />} />
             <Route path="risk" element={<RiskPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
