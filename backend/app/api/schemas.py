@@ -113,6 +113,7 @@ class StatusOut(BaseModel):
     strategies: list[StrategyOut]
     open_leg_groups: int
     journal: dict[str, Any]
+    plan_submitted: bool = True  # False: strategies wait for today's plan (Settings)
 
 
 class DailyPnlOut(BaseModel):

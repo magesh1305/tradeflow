@@ -133,7 +133,7 @@ def build_executor(settings: Settings, clock: Clock, broker: KiteBroker | None) 
     return PaperExecutor(clock, slippage_ticks=settings.paper_slippage_ticks)
 
 
-def engine_config(settings: Settings) -> EngineConfig:
+def engine_config(settings: Settings, *, require_daily_plan: bool = False) -> EngineConfig:
     return EngineConfig(
         square_off_time=settings.square_off_time,
         market_open=settings.market_open,
@@ -150,6 +150,8 @@ def engine_config(settings: Settings) -> EngineConfig:
         index_underlyings=frozenset(settings.index_underlyings),
         physical_settlement_exit_days=settings.physical_settlement_exit_days,
         physical_settlement_exit_time=settings.physical_settlement_exit_time,
+        require_daily_plan=require_daily_plan,
+        capital_margin_pct=settings.paper_margin_pct,
     )
 
 
@@ -189,6 +191,7 @@ def build_engine(
     realtime: bool,
     broker: KiteBroker | None = None,
     journal: OrderJournal | None = None,
+    require_daily_plan: bool = False,
 ) -> tuple[TradingEngine, list[str]]:
     """Wire the engine. Returns the engine and the ids of strategies enabled at start."""
     positions = PositionBook()
@@ -202,7 +205,7 @@ def build_engine(
         positions=positions,
         clock=clock,
         notifier=notifier,
-        config=engine_config(settings),
+        config=engine_config(settings, require_daily_plan=require_daily_plan),
         wall_clock=SystemClock() if realtime else None,
         journal=journal,
         margin=build_margin_checker(settings, broker, positions, clock_quote),
@@ -222,6 +225,7 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
     from app.backtest.job import ProcessBacktestExecutor  # noqa: PLC0415
     from app.backtest.store import SqlBacktestStore  # noqa: PLC0415
     from app.runtime import Runtime  # noqa: PLC0415 - runtime imports factory
+    from app.storage.plans import SqlPlanStore  # noqa: PLC0415
 
     notifier = build_notifier(settings)
 
@@ -236,6 +240,7 @@ def build_runtime(settings: Settings, auth: KiteAuth | None) -> Runtime:
         auth=auth,
         exit_process=exit_process if settings.exit_on_session_expiry else None,
         history=build_history_store(settings),
+        plans=SqlPlanStore(make_sessionmaker(make_engine(settings.database_url))),
         backtests=SqlBacktestStore(make_sessionmaker(make_engine(settings.database_url))),
         backtest_executor=ProcessBacktestExecutor(settings),
     )

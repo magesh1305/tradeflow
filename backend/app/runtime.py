@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +36,7 @@ from app.data.historical import (
     record_underlying,
     session_bounds,
 )
-from app.engine.engine import TradingEngine
+from app.engine.engine import StrategyState, TradingEngine
 from app.engine.recovery import (
     PositionDiff,
     RecoveryReport,
@@ -43,7 +45,17 @@ from app.engine.recovery import (
     rebuild,
 )
 from app.notify.base import Notifier
+from app.risk.manager import PlanLimits, StrategyLimits
+from app.risk.plan import (
+    LOOSEN_CONFIRMATION,
+    AccountPlan,
+    DailyPlan,
+    StrategyPlan,
+    describe_changes,
+    loosened,
+)
 from app.storage.journal import Journal, daily_pnl_rows
+from app.storage.plans import MemoryPlanStore, PlanStore
 from app.strategies.registry import (
     StrategyConfig,
     discover,
@@ -51,6 +63,18 @@ from app.strategies.registry import (
 )
 
 BacktestExecutor = Callable[[BacktestRequest, int], Awaitable[None]]
+
+
+class PlanError(ValueError):
+    """The submitted plan is invalid."""
+
+
+class PlanLooseningError(RuntimeError):
+    """Loosening limits during market hours needs `confirm: "LOOSEN"`."""
+
+    def __init__(self, loosened: list[str]) -> None:
+        super().__init__("loosening limits during market hours needs confirmation")
+        self.loosened = loosened
 
 
 def load_overrides(path: Path) -> dict[str, dict[str, Any]]:
@@ -95,6 +119,7 @@ class Runtime:
         history: HistoryStore | None = None,
         backtests: BacktestStore | None = None,
         backtest_executor: BacktestExecutor | None = None,
+        plans: PlanStore | None = None,
     ) -> None:
         self.settings = settings
         self.notifier = notifier
@@ -106,6 +131,11 @@ class Runtime:
         self.backtests = backtests
         self._backtest_executor = backtest_executor
         self._backtest_tasks: set[asyncio.Task[None]] = set()
+        self.plans: PlanStore = plans or MemoryPlanStore()
+        self.plan: DailyPlan | None = None
+        self.plan_date: date | None = None
+        self.plan_submitted_at: datetime | None = None
+        self._plan_lock = asyncio.Lock()
         self.engine: TradingEngine | None = None
         self.broker: KiteBroker | None = None
         self.recovery: RecoveryReport | None = None
@@ -186,12 +216,14 @@ class Runtime:
                 realtime=True,
                 broker=self.broker,
                 journal=self.journal,
+                require_daily_plan=True,  # no strategy starts before today's plan
             )
             self.engine = engine
             self.recovery = await self._recover(engine, today)
             if not self.recovery.ok:
                 engine.block("; ".join(self.recovery.mismatches)[:500])
             await engine.start(enabled)
+            await self._apply_stored_plan(today)
             if s.feed == "kite":
                 self._kite_feed_used = True
             log.info("engine started", extra={"enabled": enabled})
@@ -244,6 +276,204 @@ class Runtime:
             "warning",
         )
         return {"adopted_positions": adopted}
+
+    # --- daily plan (Settings tab) --------------------------------------------------------
+
+    def _configs(self) -> list[StrategyConfig]:
+        s = self.settings
+        configs = load_configs(s.strategies_file) if s.strategies_file.exists() else []
+        return apply_overrides(configs, load_overrides(s.strategy_overrides_file))
+
+    def default_plan(self) -> DailyPlan:
+        """Pre-fill when no plan was ever submitted: the .env limits and the
+        strategies.yaml enabled flags and lots."""
+        s = self.settings
+        strategies: dict[str, StrategyPlan] = {}
+        for cfg in self._configs():
+            lots = cfg.params.get("lots")
+            if self.engine is not None and cfg.id in self.engine.slots:
+                lots = getattr(self.engine.slots[cfg.id].strategy.params, "lots", lots)
+            strategies[cfg.id] = StrategyPlan(
+                enabled=cfg.enabled, lots=int(lots) if isinstance(lots, int) else None
+            )
+        return DailyPlan(
+            account=AccountPlan(
+                daily_loss_limit=s.daily_loss_limit,
+                max_open_positions=s.max_open_positions,
+                max_lots_per_order=s.max_lots_per_order,
+                trading_start=s.trading_start,
+                trading_end=s.trading_end,
+            ),
+            strategies=strategies,
+        )
+
+    async def plan_for_form(self) -> tuple[DailyPlan, bool]:
+        """(plan to show, submitted today?). Not submitted: the last plan pre-filled."""
+        today = self.clock.now().date()
+        if self.plan is not None and self.plan_date == today:
+            return self.plan, True
+        base = self.default_plan()
+        try:
+            last = await self.plans.latest(self.settings.mode)
+        except Exception:
+            log.exception("could not load the last plan")
+            last = None
+        if last is not None:
+            prev = DailyPlan.model_validate(last.plan)
+            # Keep today's strategy list; carry over earlier values where they exist.
+            base = DailyPlan(
+                account=prev.account,
+                strategies={
+                    sid: prev.strategies.get(sid, sp) for sid, sp in base.strategies.items()
+                },
+            )
+        return base, False
+
+    def market_hours_now(self) -> bool:
+        now = self.clock.now()
+        s = self.settings
+        return now.weekday() < 5 and s.market_open <= now.time() <= s.market_close
+
+    def _validate_plan(self, plan: DailyPlan) -> None:
+        s = self.settings
+        a = plan.account
+        if a.trading_start < s.market_open or a.trading_end > s.square_off_time:
+            raise PlanError(
+                f"trading window must lie between market open {s.market_open:%H:%M} "
+                f"and square-off {s.square_off_time:%H:%M}"
+            )
+        known = {c.id for c in self._configs()}
+        if self.engine is not None:
+            known |= set(self.engine.slots)
+        unknown = set(plan.strategies) - known
+        if unknown:
+            raise PlanError(f"unknown strategies: {sorted(unknown)}")
+        engine = self.engine
+        if engine is None:
+            return
+        for sid, sp in plan.strategies.items():
+            slot = engine.slots.get(sid)
+            if slot is None or sp.lots is None:
+                continue
+            if "lots" not in type(slot.strategy.params).model_fields:
+                raise PlanError(f"{sid} has no `lots` parameter")
+            if sp.lots != slot.strategy.params.lots and slot.state is StrategyState.RUNNING:
+                raise PlanError(f"stop {sid} before changing its lots")
+
+    def _apply_plan(self, plan: DailyPlan, today: date) -> dict[str, list[str]]:
+        """Push the plan into the engine. Returns started / stopped / warnings."""
+        engine = self.engine
+        result: dict[str, list[str]] = {"started": [], "stopped": [], "warnings": []}
+        if engine is None:
+            result["warnings"].append("engine not running: the plan applies when it starts")
+            return result
+        a = plan.account
+        engine.risk.limits = dataclasses.replace(
+            engine.risk.limits,
+            daily_loss_limit=a.daily_loss_limit,
+            max_open_positions=a.max_open_positions,
+            max_lots_per_order=a.max_lots_per_order,
+            trading_start=a.trading_start,
+            trading_end=a.trading_end,
+        )
+        engine.risk.plan = PlanLimits(
+            profit_target=a.profit_target,
+            max_trades_per_day=a.max_trades_per_day,
+            strategies={
+                sid: StrategyLimits(
+                    max_trades_per_day=sp.max_trades_per_day,
+                    loss_limit=sp.loss_limit,
+                    profit_target=sp.profit_target,
+                    max_lots_per_order=sp.max_lots_per_order,
+                    max_capital=sp.max_capital,
+                )
+                for sid, sp in plan.strategies.items()
+            },
+        )
+        engine.plan_date = today
+        for sid, sp in plan.strategies.items():
+            slot = engine.slots.get(sid)
+            if slot is None:
+                continue
+            current_lots = getattr(slot.strategy.params, "lots", sp.lots)
+            if sp.lots is not None and sp.lots != current_lots:
+                self.set_strategy_params(
+                    sid, {**slot.strategy.params.model_dump(mode="json"), "lots": sp.lots}
+                )
+            if sp.enabled and slot.state is not StrategyState.RUNNING:
+                try:
+                    engine.start_strategy(sid)
+                    result["started"].append(sid)
+                except RuntimeError as exc:  # blocked engine or kill switch
+                    result["warnings"].append(f"{sid} not started: {exc}")
+            elif not sp.enabled and slot.state is StrategyState.RUNNING:
+                engine.stop_strategy(sid)  # positions kept, with their stops
+                result["stopped"].append(sid)
+        return result
+
+    async def submit_plan(self, plan: DailyPlan, confirm: str | None = None) -> dict[str, Any]:
+        """Validate, check loosening, apply, persist and alert."""
+        async with self._plan_lock:
+            today = self.clock.now().date()
+            self._validate_plan(plan)
+            previous = self.plan if self.plan_date == today else None
+            looser = loosened(previous, plan) if previous is not None else []
+            if looser and self.market_hours_now() and confirm != LOOSEN_CONFIRMATION:
+                raise PlanLooseningError(looser)
+            changes = describe_changes(previous, plan)
+            result = self._apply_plan(plan, today)
+            now = self.clock.now()
+            if previous is None:
+                self.plan_submitted_at = now
+            self.plan, self.plan_date = plan, today
+            try:
+                await self.plans.save(
+                    today,
+                    self.settings.mode,
+                    plan.model_dump(mode="json"),
+                    now=now,
+                    changes=changes,
+                    loosened=looser,
+                )
+            except Exception as exc:
+                log.exception("could not save the daily plan")
+                result["warnings"].append(f"plan applied but not saved: {exc}")
+                await self.notifier.send(f"Daily plan could not be saved: {exc}", "critical")
+            if looser:
+                await self.notifier.send(
+                    "Daily plan LOOSENED during market hours:\n" + "\n".join(looser),
+                    "critical",
+                )
+            summary = "Daily plan submitted" if previous is None else "Daily plan updated"
+            if previous is not None:
+                summary += ": " + "; ".join(changes[:10])
+            if result["started"]:
+                summary += f". Started: {', '.join(result['started'])}"
+            await self.notifier.send(summary, "info")
+            return {"changes": changes, "loosened": looser, **result}
+
+    async def _apply_stored_plan(self, today: date) -> None:
+        """After a (re)start, re-apply a plan already submitted today."""
+        plan = self.plan if self.plan_date == today else None
+        if plan is None:
+            try:
+                stored = await self.plans.get(today, self.settings.mode)
+            except Exception:
+                log.exception("could not load today's plan")
+                stored = None
+            if stored is not None:
+                plan = DailyPlan.model_validate(stored.plan)
+                self.plan, self.plan_date = plan, today
+                self.plan_submitted_at = stored.submitted_at
+        if plan is not None:
+            try:
+                self._validate_plan(plan)
+                self._apply_plan(plan, today)
+            except Exception:
+                log.exception("today's plan could not be re-applied; submit it again")
+
+    async def plan_history(self, day: date | None = None) -> list[dict[str, Any]]:
+        return await self.plans.events(day or self.clock.now().date(), self.settings.mode)
 
     # --- strategy params & backtests -----------------------------------------------------
 

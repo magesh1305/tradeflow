@@ -35,7 +35,12 @@ from app.api.schemas import (
 from app.backtest.runner import BacktestRequest
 from app.data.historical import INTERVAL_SECONDS
 from app.data.instruments import InstrumentNotFoundError
-from app.engine.engine import EngineBlockedError, StrategyRunningError, TradingEngine
+from app.engine.engine import (
+    EngineBlockedError,
+    PlanRequiredError,
+    StrategyRunningError,
+    TradingEngine,
+)
 from app.runtime import Runtime
 from app.storage.journal import ReportFilter
 from app.strategies.registry import StrategyConfig, StrategyConfigError, build, discover
@@ -104,7 +109,7 @@ async def start_strategy(strategy_id: str, runtime: RuntimeDep) -> StrategyDetai
     slot = _slot(e, strategy_id)
     try:
         e.start_strategy(strategy_id)
-    except EngineBlockedError as exc:
+    except (EngineBlockedError, PlanRequiredError) as exc:
         raise HTTPException(409, str(exc)) from exc
     except RuntimeError as exc:  # kill switch active
         raise HTTPException(409, str(exc)) from exc

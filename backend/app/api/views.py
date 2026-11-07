@@ -159,6 +159,7 @@ def status(runtime: Runtime) -> StatusOut:
         open_orders=[order(o, s.mode) for o in e.open_orders()] if e else [],
         strategies=[strategy(e, slot) for slot in e.slots.values()] if e else [],
         open_leg_groups=len(e.legs.open_groups()) if e else 0,
+        plan_submitted=e.plan_submitted if e else False,
         journal={
             "backlog": runtime.journal.backlog,
             "failures": runtime.journal.failures,

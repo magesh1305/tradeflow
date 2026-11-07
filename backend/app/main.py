@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import factory
 from app.api import auth, control, recovery, ws
+from app.api import settings as plan_settings
 from app.config import get_settings
 from app.core.clock import now_ist
 from app.core.logging import configure_logging
@@ -87,6 +88,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)  # public: the daily Kite login
     app.include_router(recovery.router)  # admin
     app.include_router(control.router)  # admin
+    app.include_router(plan_settings.router)  # admin: the daily plan
     app.include_router(ws.router)  # token query param
 
     @app.get("/health")
