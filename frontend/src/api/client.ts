@@ -6,10 +6,12 @@ import type {
   BacktestDetail,
   BacktestInput,
   BacktestRun,
+  ConnectionInfo,
+  DailyPlan,
   DailyPnl,
   Fill,
   KillSwitch,
-  DailyPlan,
+  KiteTest,
   OptionChain,
   Order,
   PlanEvent,
@@ -152,6 +154,9 @@ export const api = {
   submitPlan: (plan: DailyPlan, confirm?: string) =>
     request<PlanResult>("POST", "/settings/plan", { body: { plan, confirm } }),
   planHistory: () => request<PlanEvent[]>("GET", "/settings/history"),
+
+  connection: () => request<ConnectionInfo>("GET", "/connection"),
+  testKite: () => request<KiteTest>("POST", "/connection/kite"),
 
   backtests: () => request<BacktestRun[]>("GET", "/backtests"),
   backtest: (id: number) => request<BacktestDetail>("GET", `/backtests/${id}`),

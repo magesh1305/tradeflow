@@ -195,6 +195,10 @@ class KiteBroker:
 
     # --- account state --------------------------------------------------------
 
+    async def profile(self) -> dict[str, Any]:
+        """Read-only account profile; used by the dashboard's connection test."""
+        return await self._call(self._data_limiter, self._kite.profile)
+
     async def orders(self) -> list[dict[str, Any]]:
         return list(await self._call(self._data_limiter, self._kite.orders))
 

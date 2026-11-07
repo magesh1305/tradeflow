@@ -81,7 +81,7 @@ Charges, history, backtests:
 - The daily 15:40 job records 1-minute candles for `RECORD_UNDERLYINGS` (ATM +/- `RECORD_STRIKES_WIDTH`, nearest `RECORD_EXPIRIES`).
 
 Control API (`app/api/`):
-- Everything except `/health` and `/auth/*` needs `X-Admin-Token` (constant-time compare). `/ws?token=` streams the status snapshot every second, and access logs redact the token. `tests/test_api.py` walks every route via OpenAPI and asserts it returns 401 without the token, so **update its count when adding routes**.
+- Everything except `/health` and `/auth/*` needs `X-Admin-Token` (constant-time compare). `/ws?token=` streams the status snapshot every second, and access logs redact the token. `tests/test_api.py` walks every route via OpenAPI and asserts it returns 401 without the token, so **update its count when adding routes**. Kite keys and live switches are set only in the server's .env; the dashboard's Connection check (`api/connection.py`) reports them without values and tests the session with the read-only `KiteBroker.profile()`.
 - `/docs` and `/openapi.json` are off unless `API_DOCS=true` (they are unauthenticated).
 - `/orders` and `/fills` merge the journal (history) with live engine state (today); `/pnl/daily` adds today's live row (`live: true`).
 - `PUT /strategies/{id}/params` only works while the strategy is stopped. Changes are validated and saved to `STRATEGY_OVERRIDES_FILE`, so they survive the daily restart.

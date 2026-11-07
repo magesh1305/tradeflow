@@ -28,6 +28,7 @@ const FAQ: { q: string; a: string }[] = [
   { q: "Is practice mode really safe?", a: "Yes. In practice mode the app never sends an order to Zerodha. It only pretends, using real or simulated prices." },
   { q: "When should I switch to real money?", a: "Only after several weeks of practice with results you are comfortable with, and with money you can afford to lose. Real money mode needs extra settings on the server, so it can't be switched on by accident." },
   { q: "Why did a robot not trade today?", a: "Robots trade only when their rules match. Quiet days with no trades are normal. Also check that today's plan is submitted and the robot is turned on." },
+  { q: "Where do I put my Zerodha (Kite Connect) details?", a: "In the server's settings file (backend/.env, or .env next to docker-compose.yml with Docker), never in the app. Open Connection check in the menu: it shows what is set, gives the exact redirect URL for your Kite app, and has a Test connection button that places no orders." },
   { q: "What are charges?", a: "Zerodha brokerage, government taxes (STT, GST, stamp duty) and exchange fees. They are paid on every trade, win or lose, and are always shown." },
 ];
 

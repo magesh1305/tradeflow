@@ -324,3 +324,37 @@ export interface PlanEvent {
   changes: string[];
   loosened: string[];
 }
+
+export interface ConnectionCheck {
+  label: string;
+  ok: boolean | null; // null = can't be checked from the dashboard
+  fix: string;
+}
+
+export interface ConnectionInfo {
+  mode: Mode;
+  feed: string;
+  storage: string;
+  env_file: string;
+  kite: {
+    api_key_set: boolean;
+    api_secret_set: boolean;
+    user_id_set: boolean;
+    redirect_url: string;
+    logged_in: boolean;
+    user_id: string;
+    expires_at: string;
+    session_error: string;
+  };
+  database: { used: boolean; ok: boolean | null; detail: string };
+  live_ready: boolean;
+  live_checks: ConnectionCheck[];
+}
+
+export interface KiteTest {
+  ok: boolean;
+  detail: string;
+  user_id: string;
+  user_name: string;
+  broker: string;
+}

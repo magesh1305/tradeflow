@@ -9,6 +9,7 @@ import { BacktestPage, BacktestsPage } from "./pages/Backtests";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { OptionChainPage } from "./pages/OptionChain";
+import { ConnectionPage } from "./pages/Connection";
 import { HelpPage } from "./pages/Help";
 import { MorePage } from "./pages/More";
 import { ActivityPage, DailyPnlPage, RiskPage } from "./pages/Reports";
@@ -98,6 +99,7 @@ function Routed() {
             <Route path="backtests/:id" element={<BacktestPage />} />
             <Route path="safety" element={<RiskPage />} />
             <Route path="help" element={<HelpPage />} />
+            <Route path="connection" element={<ConnectionPage />} />
             <Route path="more" element={<MorePage />} />
             {/* Old addresses keep working. */}
             <Route path="settings" element={<Navigate to="/plan" replace />} />

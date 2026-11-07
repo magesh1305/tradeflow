@@ -114,7 +114,8 @@ async def test_every_route_except_health_and_auth_requires_admin_token(env: Env)
             r = await env.client.request(method.upper(), path, headers={"X-Admin-Token": "x" * 30})
             assert r.status_code == 401, (method, path)
             checked += 1
-    assert checked == 22  # 17 control + 2 recovery + 3 settings routes; update when adding routes
+    # 17 control + 2 recovery + 3 settings + 2 connection routes; update when adding routes
+    assert checked == 24
     assert (await env.client.get("/health")).status_code == 200
     # Interactive docs are unauthenticated, so they are off by default.
     assert (await env.client.get("/docs")).status_code == 404
@@ -382,3 +383,69 @@ def test_access_log_redacts_ws_token() -> None:
     )
     RedactTokenFilter().filter(rec)
     assert TOKEN not in rec.getMessage() and "token=***" in rec.getMessage()
+
+
+# --- connection check ---------------------------------------------------------------------
+
+
+class _FakeAuth:
+    def __init__(self, session: Any) -> None:
+        self.session = session
+
+    async def current_session(self) -> Any:
+        return self.session
+
+
+class _FakeBroker:
+    async def profile(self) -> dict[str, Any]:
+        return {"user_id": "AB1234", "user_name": "Test User", "broker": "ZERODHA"}
+
+
+def _client_for(env: Env, auth: Any) -> httpx.AsyncClient:
+    app = create_app()
+    app.state.runtime = env.runtime
+    app.state.auth = auth
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def test_connection_report_never_leaks_secrets(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("KITE_API_KEY", "key-abc-123")
+    monkeypatch.setenv("KITE_API_SECRET", "secret-xyz-789")
+    monkeypatch.setenv("STORAGE", "memory")
+    get_settings.cache_clear()
+    async with _client_for(env, None) as client:
+        r = await client.get("/connection", headers=H)
+    assert r.status_code == 200
+    body = r.json()
+    assert "key-abc-123" not in r.text and "secret-xyz-789" not in r.text and TOKEN not in r.text
+    assert body["mode"] == "paper" and body["live_ready"] is False
+    assert body["kite"]["api_key_set"] and body["kite"]["api_secret_set"]
+    assert body["kite"]["redirect_url"] == "https://dash.example/api/auth/callback"
+    assert body["database"] == {"used": False, "ok": None, "detail": body["database"]["detail"]}
+    checks = {c["label"]: c["ok"] for c in body["live_checks"]}
+    assert checks["MODE=live"] is False
+    assert checks["Kite API key and secret"] is True
+    assert checks["Server's static IP whitelisted in the Kite console"] is None
+
+
+async def test_kite_connection_test(env: Env) -> None:
+    async with _client_for(env, None) as client:
+        r = await client.post("/connection/kite", headers=H)
+    assert r.status_code == 409 and "not set" in r.json()["detail"]
+
+    async with _client_for(env, _FakeAuth(None)) as client:
+        r = await client.post("/connection/kite", headers=H)
+    assert r.status_code == 409 and "Log in" in r.json()["detail"]
+
+    from app.brokers.session import KiteSession  # noqa: PLC0415
+
+    session = KiteSession(
+        access_token="t", user_id="AB1234", login_time=ist(9, 0), expires_at=ist(23, 0)
+    )
+    env.runtime.broker = _FakeBroker()  # type: ignore[assignment]
+    async with _client_for(env, _FakeAuth(session)) as client:
+        r = await client.post("/connection/kite", headers=H)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True and r.json()["user_name"] == "Test User"

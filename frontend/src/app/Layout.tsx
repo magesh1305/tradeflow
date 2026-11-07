@@ -23,6 +23,7 @@ const NAV: NavItem[] = [
   { to: "/option-chain", label: "Option prices", icon: "table" },
   { to: "/backtests", label: "Test on past data", icon: "flask" },
   { to: "/safety", label: "Safety limits", icon: "shield" },
+  { to: "/connection", label: "Connection check", icon: "link" },
   { to: "/help", label: "How it works", icon: "help" },
 ];
 

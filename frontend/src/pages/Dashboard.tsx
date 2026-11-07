@@ -69,7 +69,7 @@ function Checklist({ status }: { status: Status }) {
           {!a
             ? "Checking…"
             : !a.configured
-              ? "Not needed now: practice prices are simulated."
+              ? "Not needed now: practice prices are simulated. See Connection check to set it up."
               : a.logged_in
                 ? `Connected as ${a.user_id ?? ""}${a.expires_at ? ` until ${istDateTime(a.expires_at)}` : ""}.`
                 : "Zerodha asks you to log in once every morning."}

@@ -12,6 +12,7 @@ const ITEMS: { to: string; icon: IconName; title: string; text: string }[] = [
   { to: "/option-chain", icon: "table", title: "Option prices", text: "Live Call and Put prices" },
   { to: "/backtests", icon: "flask", title: "Test on past data", text: "Try a robot on old prices" },
   { to: "/safety", icon: "shield", title: "Safety limits", text: "Rules every order must pass" },
+  { to: "/connection", icon: "link", title: "Connection check", text: "Zerodha, database, real money" },
   { to: "/help", icon: "help", title: "How it works", text: "Guide, words and questions" },
 ];
 

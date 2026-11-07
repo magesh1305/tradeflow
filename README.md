@@ -168,6 +168,7 @@ a glossary and common questions. Desktop has a sidebar; phones have five bottom 
 | Option prices (`/option-chain`) | Calls and puts around the current NIFTY level with price, offers, open contracts, IV and Greeks |
 | Test on past data (`/backtests`) | Run form, list of tests, result page with summary cards, money-over-time chart and missing-data table |
 | Safety limits (`/safety`) | Loss used today, open trades, orders per minute, account money (margin), every risk rule in plain words |
+| Connection check (`/connection`) | Mode, price source and database status; whether the Kite keys are set (never the values), today's Zerodha login and a **Test connection** button (read-only profile call); the exact redirect URL for your Kite app; a checklist of everything real-money mode still needs |
 | How it works (`/help`) | System overview, daily routine, practice vs real money, safety net, risk warning, glossary, FAQ |
 
 ### Today's plan
@@ -358,6 +359,7 @@ Interactive docs are off unless `API_DOCS=true`, because they are unauthenticate
 | `POST /kill-switch` · `POST /kill-switch/reset` | Body `{"reason": "..."}`; reset keeps strategies stopped |
 | `POST /backtests` · `GET /backtests` · `GET /backtests/{id}` | Body `{"strategy", "params", "start", "end", "interval"}`; runs in a separate process (202) |
 | `GET /settings` · `POST /settings/plan` · `GET /settings/history` | Today's plan form; submit/update (`{"plan": {...}, "confirm": "LOOSEN"}` when loosening in market hours, else 409 lists what would loosen); audit trail |
+| `GET /connection` · `POST /connection/kite` | Configuration and reachability report without secrets; read-only Kite profile test (no orders) |
 | `GET /recovery` · `POST /recovery/resolve` | Crash-recovery status; resolve with `{"confirm": "RESOLVE", "adopt_broker_positions": false}` |
 | `WS /ws?token=<ADMIN_TOKEN>` | Status snapshot every second (`{"type": "status", "data": {...}}`) |
 
