@@ -123,6 +123,13 @@ frontend/src/api/   single typed API client
 
 ## Commands
 
+One-click practice (Windows, no Docker/DB): double-click `Start tradeflow.bat` /
+`Stop tradeflow.bat` (runs `scripts/practice.ps1`: paper + sim + `STORAGE=memory`,
+any-time trading hours, state in `.practice/`). `STORAGE=memory` is a live-mode latch
+failure. Keep `practice.ps1` ASCII-only (PowerShell 5.1); `.bat`/`.ps1` are CRLF.
+The dashboard's first visit opens the **Start here** guide (`/start`); the Plan page
+defaults to the simple form (loss limit + robots), with every limit under Advanced.
+
 The commands below are filled in as each phase lands.
 
 ```

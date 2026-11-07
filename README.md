@@ -10,6 +10,7 @@ controls strategies and the kill switch.
 > characters, `FEED=kite` and Kite API keys are all set. Read the
 > [going-live checklist](#going-live-checklist) before touching any of those.
 
+- [Try it: one-click practice (Windows)](#try-it-one-click-practice-windows)
 - [Architecture](#architecture)
 - [Local setup](#local-setup)
 - [Daily routine: Kite login](#daily-routine-kite-login)
@@ -25,6 +26,29 @@ controls strategies and the kill switch.
 - [Troubleshooting](#troubleshooting)
 - [Known limitations](#known-limitations)
 - [Going-live checklist](#going-live-checklist)
+
+## Try it: one-click practice (Windows)
+
+For anyone, no technical knowledge needed. Uses **pretend money and simulated
+prices**: no Zerodha account, no Docker, no database.
+
+1. Install [Python 3.12](https://www.python.org/downloads/) (tick **Add python.exe
+   to PATH**) and [Node.js 22 LTS](https://nodejs.org/). Once only.
+2. Double-click **`Start tradeflow.bat`** in the project folder. The first time it
+   installs everything (a few minutes). Then the dashboard opens in your browser and
+   the password is copied: click the password box and press **Ctrl+V**.
+3. The **Start here** guide opens and walks you through it: what tradeflow is,
+   practice mode, Zerodha, and your plan for today (two questions: the most you can
+   lose today, and which robots may trade). Then the robots start.
+4. Double-click **`Stop tradeflow.bat`** when you are done.
+
+What it does: `scripts/practice.ps1` always forces `MODE=paper`, `FEED=sim` and
+`STORAGE=memory` (live mode refuses memory storage), lets robots trade at any time of
+day (the prices are simulated), and keeps its password and logs in `.practice\`
+(gitignored). Nothing is saved between runs. It needs ports 8000 and 5180 free.
+
+This is for learning. Real market prices and real money need the full setup below
+(Docker, a Kite Connect app, a server with a static IP), done by someone technical.
 
 ## Architecture
 
