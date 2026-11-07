@@ -48,6 +48,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tradeflow}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-tradeflow}
       REDIS_URL: redis://redis:6379/0
+      # Must be on the volume (and writable): overrides any value in .env.
+      STRATEGY_OVERRIDES_FILE: /app/state/strategies.local.yaml
     ports:
       - "127.0.0.1:8000:8000" # direct API access for the CLI / debugging only
     volumes:
