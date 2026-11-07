@@ -86,7 +86,7 @@ Control API (`app/api/`):
 - `/orders` and `/fills` merge the journal (history) with live engine state (today); `/pnl/daily` adds today's live row (`live: true`).
 - `PUT /strategies/{id}/params` only works while the strategy is stopped. Changes are validated and saved to `STRATEGY_OVERRIDES_FILE`, so they survive the daily restart.
 - `POST /backtests` returns 202 straight away. The run happens in a separate process (`backtest/job.py`) so it can't delay the live event loop.
-- Daily plan (`risk/plan.py`, `api/settings.py`, Settings tab): the runtime engine has `require_daily_plan=True`, so **no strategy starts until today's plan is submitted** (backtests don't need one). The plan sets account limits (`RiskManager.limits`) and `PlanLimits`: profit targets (no new entries), max trades/day (new entries; one leg group = one trade), per-strategy loss limit (stop + exit that strategy), max lots and max capital (margin estimate). Loosening during market hours needs `confirm: "LOOSEN"` (409 otherwise). Plans are stored in `daily_plans` + `plan_events` (migration 0003) and re-applied on restart.
+- Daily plan (`risk/plan.py`, `api/settings.py`, Today's plan page at `/plan`): the runtime engine has `require_daily_plan=True`, so **no strategy starts until today's plan is submitted** (backtests don't need one). The plan sets account limits (`RiskManager.limits`) and `PlanLimits`: profit targets (no new entries), max trades/day (new entries; one leg group = one trade), per-strategy loss limit (stop + exit that strategy), max lots and max capital (margin estimate). Loosening during market hours needs `confirm: "LOOSEN"` (409 otherwise). Plans are stored in `daily_plans` + `plan_events` (migration 0003) and re-applied on restart.
 - Tests never read a developer's `.env` (`conftest.py` disables `env_file`).
 - API response models live in `api/schemas.py`; the frontend types in `frontend/src/api/` mirror them.
 
@@ -95,7 +95,9 @@ Frontend (`frontend/`):
 - Every direct and transitive package must be at least 14 days old. Transitive versions that are too new are pinned in `package.json` `overrides` (with `name@^major` keys when two majors coexist). Re-run the age check after any dependency change.
 - The admin token lives in memory + sessionStorage only (`src/api/token.ts`), never localStorage. A 401 clears it.
 - All HTTP goes through `src/api/client.ts` (`api.*`). Live status comes from one WebSocket (`useStatusSocket`: exponential backoff, a 5s stale watchdog, no retry on close code 1008). While it's down, the app falls back to polling `/status` and shows DISCONNECTED.
-- The kill switch only fires after typing `KILL`; on phones it is pinned to the bottom bar.
+- The kill switch (shown as **Emergency stop**) only fires after typing `KILL`; it sits in the sticky top bar on every screen size.
+- Plain English for non-traders: screens say Robots (strategies), Today's plan (settings), Activity (orders/trades), Practice mode / Real money (paper/live), Intraday / Carry forward (MIS/NRML). Strategies supply `title`, `summary`, `how_it_works`, `risk_level`, `risk_note` and pydantic `Field(title=, description=)` for every param; positions/orders/fills carry a readable `label` and `lot_size`. Every trading word in the UI comes from `src/lib/glossary.ts` (tap-to-explain via `<Term>`); P&L always shows a sign and a word, never colour alone.
+- Layout: sidebar on desktop, five bottom tabs on phones (Home, Plan, Robots, Activity, More). Old routes (`/strategies`, `/settings`, `/orders`, `/trades`, `/pnl`, `/risk`) redirect.
 - The dev server proxies `/api` (prefix stripped) and `/ws` to `BACKEND_URL` (default `http://127.0.0.1:8000`); production nginx does the same.
 
 ```

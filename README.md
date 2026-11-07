@@ -110,7 +110,7 @@ logs in once per trading day.
    other Kite account are rejected.
 2. **Each morning (before 09:15):** open the dashboard and click **Log in to Kite**.
    Kite redirects back and the engine starts with the day's session.
-3. **Then open Settings and submit today's plan** (see [The dashboard](#the-dashboard)).
+3. **Then open Today's plan and submit it** (see [The dashboard](#the-dashboard)).
    No strategy starts until you do. The form is pre-filled with your last plan, so
    most days it's a review and one click.
 4. At 06:00 the next day the backend stops cleanly, flushes the journal and exits.
@@ -124,25 +124,35 @@ option candles around ATM.
 
 ## The dashboard
 
-Log in with `ADMIN_TOKEN`. It is kept for the browser tab only (sessionStorage) and is
-cleared when the backend answers 401.
+Log in with `ADMIN_TOKEN` (the "Admin password"). It is kept for the browser tab only
+(sessionStorage) and is cleared when the backend answers 401.
+
+The dashboard is written for people who have never traded: strategies are called
+**robots**, every trading word has a dotted underline you can tap for a plain-English
+meaning, and the **How it works** page explains the whole system, the daily routine,
+a glossary and common questions. Desktop has a sidebar; phones have five bottom tabs
+(Home, Plan, Robots, Activity, More).
 
 | Page | What it shows / does |
 | --- | --- |
-| Header (every page) | **PAPER** (blue) or **LIVE** (red) badge, live/DISCONNECTED indicator, ENGINE BLOCKED warning, kill switch, dark/light toggle, log out |
-| Dashboard | Net, gross, realized, unrealized P&L and charges; Kite session with **Log in to Kite**; engine and feed state; open positions (with exchange-stop price); open orders; P&L per strategy; **Square off all** |
-| Strategies | State, errors, positions, P&L per instance. Detail page: **Start / Stop** (stop asks whether to exit positions) and a parameter form generated from the strategy's schema, editable only while stopped |
-| Option chain | Calls and puts around ATM: LTP, bid/ask, OI, IV, delta, theta, vega, gamma; ATM row highlighted; underlying, expiry and width selectors |
-| Orders / Trades | Filter by date range, strategy and mode; **Export CSV**. Trades show charges per fill |
-| Daily P&L | Bar chart and table of net P&L per day (today's row is live until the 15:35 summary) |
-| Backtests | Run form; list of runs; result page with metric cards, equity curve and a missing-data table |
-| Risk | Usage bars (daily loss, open positions, orders/minute), margin, kill-switch state, all limits |
-| **Settings** | **Today's trading plan**, submitted every morning (see below) |
+| Top bar (every page) | **PRACTICE MODE** (blue) or **REAL MONEY** (red, pulsing) badge, Live/DISCONNECTED, "Submit today's plan" and "Needs a check" reminders, red **EMERGENCY STOP** (the kill switch; type `KILL` to confirm) |
+| Home (`/`) | Today's result after charges (booked, still open, charges); morning checklist (Zerodha login, plan, robots running); open trades as cards ("Bought 1 lot of NIFTY 24000 Call…"); a "What's happening" timeline of today's trades; robots with today's result; **Close all trades**; a **I've checked, continue** button when crash recovery blocked the engine |
+| Today's plan (`/plan`) | The daily plan, submitted every morning (see below) |
+| Robots (`/robots`) | A card per robot with its summary and risk level. Detail page: how it works step by step, what can go wrong, **Start / Stop** (stop asks whether to close its trades), settings form with explanations (editable only while stopped), its open trades |
+| Activity (`/activity`) | Tabs **Trades done** and **All orders**; filter by dates, robot and practice/real; **Export CSV** |
+| Profit history (`/history`) | Bar chart and table of the result per day, before and after charges |
+| Option prices (`/option-chain`) | Calls and puts around the current NIFTY level with price, offers, open contracts, IV and Greeks |
+| Test on past data (`/backtests`) | Run form, list of tests, result page with summary cards, money-over-time chart and missing-data table |
+| Safety limits (`/safety`) | Loss used today, open trades, orders per minute, account money (margin), every risk rule in plain words |
+| How it works (`/help`) | System overview, daily routine, practice vs real money, safety net, risk warning, glossary, FAQ |
 
-### Settings: the daily plan
+### Today's plan
 
-Every morning, review and submit the plan. **No strategy can start that day until you
-do.** The header shows **SUBMIT TODAY'S PLAN** until then.
+Every morning, review and submit the plan. **No robot can start that day until you
+do.** The top bar shows **Submit today's plan** until then.
+
+The table below uses the internal names; the form shows them in plain words
+(for example "Most trades today" for max trades/day).
 
 | Section | Field | What happens |
 | --- | --- | --- |
@@ -418,10 +428,10 @@ Dependencies are pinned to exact versions at least 14 days old:
 | Symptom | Fix |
 | --- | --- |
 | Dashboard says **DISCONNECTED** | Backend down or restarting: `docker compose ps`, `docker compose logs backend` |
-| **ENGINE BLOCKED** banner | Crash recovery found a mismatch or couldn't reach the database. Fix it, then `POST /recovery/resolve` (see Operations) |
+| **Needs a check** / "Robots can't start yet" | Crash recovery found a mismatch or couldn't reach the database. Check Kite, then press **I've checked, continue** on Home (or `POST /recovery/resolve`, see Operations) |
 | "Log in to Kite" fails | The redirect URL in the Kite console must equal `<dashboard origin>/api/auth/callback` exactly; `KITE_USER_ID` must match the account |
 | Live orders rejected with an IP error | The server's static IP isn't whitelisted in the Kite developer console |
-| Strategy won't start (409) | Today's plan isn't submitted (Settings), the kill switch is active (reset it), or the engine is blocked |
+| Robot won't start (409) | Today's plan isn't submitted, the emergency stop is on (clear it), or the engine is blocked |
 | Option entries rejected for spread/volume | The strike is illiquid; adjust `OPTION_MAX_SPREAD_PCT` / `OPTION_MIN_VOLUME` or pick another strike |
 | Backtest shows missing data | Download it (`download-history`) or let the 15:40 recorder collect it; expired options can't be downloaded |
 | `npm install` crashes with "reading 'edgesOut'" | Use npm 11: `npx -y npm@11.21.1 ci` (Node 22) |
