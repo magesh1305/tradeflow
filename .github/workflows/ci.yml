@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # CI always runs in paper mode on the simulated feed. Never set live latches here.
 env:
   MODE: paper
@@ -16,6 +20,7 @@ env:
 jobs:
   backend:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
@@ -37,6 +42,7 @@ jobs:
           --health-cmd "redis-cli ping" --health-interval 5s
           --health-timeout 5s --health-retries 20
     env:
+      # Integration tests (migrations, SQL journal, history store) use this database.
       TEST_DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/tradeflow_test
       TEST_REDIS_URL: redis://localhost:6379/1
     steps:
@@ -47,9 +53,70 @@ jobs:
           cache: pip
           cache-dependency-path: backend/constraints.txt
       - run: pip install -r requirements-dev.txt -c constraints.txt
+      - run: pip check
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy app tests
-      - run: pytest -q
+      - name: pytest (integration tests must not be skipped in CI)
+        run: pytest -q -rs | tee pytest.log; test ${PIPESTATUS[0]} -eq 0
+        shell: bash
+      - name: Fail if any integration test was skipped
+        shell: bash
+        run: |
+          if grep -E "^SKIPPED" pytest.log; then
+            echo "::error::integration tests skipped although Postgres is available"; exit 1
+          fi
 
-  # Frontend job (lint, typecheck, test, build) is added in Phase 8.
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.23.4"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # npm 10 (bundled with Node 22) crashes on this dependency tree; npm 11 is pinned.
+      - run: npx -y npm@11.21.1 ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: |
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-only/' .env
+          docker compose config --quiet
+      - name: Build images
+        run: docker compose build
+      - name: Smoke-test the stack (paper mode, simulated feed)
+        run: |
+          sed -i 's/^ADMIN_TOKEN=.*/ADMIN_TOKEN=ci-smoke-token-0123456789/' .env
+          docker compose up -d
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8080/api/health && break
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8080/api/health | grep '"mode":"paper"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/status)" = 401
+          curl -fsS -H "X-Admin-Token: ci-smoke-token-0123456789" http://127.0.0.1:8080/api/status \
+            | grep '"engine_running":true'
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<title>tradeflow</title>'
+          curl -fsS http://127.0.0.1:8080/strategies | grep -q '<div id="root">'
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
