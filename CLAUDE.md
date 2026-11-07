@@ -138,7 +138,12 @@ npm ci && npm run lint && npm run typecheck && npm test && npm run build
 docker compose up --build
 ```
 
-CI always runs with `MODE=paper FEED=sim`.
+CI always runs with `MODE=paper FEED=sim`. Jobs: `backend` (ruff, mypy, pytest with TimescaleDB + Redis; **fails if any integration test is skipped**), `frontend` (npm 11 ci, lint, typecheck, test, build), and `docker` (compose config, build both images, smoke-test the running stack through nginx).
+
+Deployment:
+- Compose binds every port to 127.0.0.1. The dashboard (nginx :8080) is reached via SSH tunnel or a TLS reverse proxy, never plain HTTP.
+- nginx resolves `backend` through Docker DNS on each request (variable `proxy_pass`), because the backend container restarts daily and may get a new IP. Its access log omits query strings, so the `/ws?token=` never lands in a log.
+- Kite redirect URL = `<dashboard origin>/api/auth/callback`. Strategy param overrides live on the `backendstate` volume.
 
 ## Working rules
 
