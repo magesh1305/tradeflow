@@ -175,3 +175,29 @@ class InstrumentRow(Base):
     strike: Mapped[float | None] = mapped_column(Float)
     first_seen: Mapped[date] = mapped_column(Date)
     last_seen: Mapped[date] = mapped_column(Date)
+
+
+class DailyPlanRow(Base):
+    """The submitted daily trading plan (Settings tab), one per trading date and mode."""
+
+    __tablename__ = "daily_plans"
+
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    mode: Mapped[str] = mapped_column(String(8), primary_key=True)
+    plan: Mapped[dict[str, Any]]
+    submitted_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
+
+
+class PlanEventRow(Base):
+    """Audit trail: every submission or change of a daily plan."""
+
+    __tablename__ = "plan_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime]
+    trading_date: Mapped[date] = mapped_column(Date, index=True)
+    mode: Mapped[str] = mapped_column(String(8))
+    changes: Mapped[list[Any]]
+    loosened: Mapped[list[Any]]
+    plan: Mapped[dict[str, Any]]
