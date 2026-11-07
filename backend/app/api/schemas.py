@@ -21,6 +21,8 @@ class PositionOut(BaseModel):
     strategy_id: str
     exchange: str
     tradingsymbol: str
+    label: str = ""  # e.g. "NIFTY 24000 Call · 10 Nov"
+    lot_size: int = 1
     instrument_token: int
     product: str
     quantity: int
@@ -37,6 +39,8 @@ class OrderOut(BaseModel):
     strategy_id: str
     exchange: str
     tradingsymbol: str
+    label: str = ""
+    lot_size: int = 1
     side: str
     quantity: int
     order_type: str
@@ -62,6 +66,8 @@ class FillOut(BaseModel):
     strategy_id: str
     exchange: str
     tradingsymbol: str
+    label: str = ""
+    lot_size: int = 1
     side: str
     quantity: int
     price: float
@@ -74,6 +80,9 @@ class FillOut(BaseModel):
 class StrategyOut(BaseModel):
     id: str
     strategy: str
+    title: str = ""  # plain-English name, e.g. "Trend follower"
+    summary: str = ""
+    risk_level: str = "medium"
     state: Literal["STOPPED", "RUNNING", "ERROR"]
     error: str
     pnl: Pnl
@@ -82,6 +91,8 @@ class StrategyOut(BaseModel):
 
 
 class StrategyDetail(StrategyOut):
+    how_it_works: list[str] = []
+    risk_note: str = ""
     params: dict[str, Any]
     params_schema: dict[str, Any]
     positions: list[PositionOut]

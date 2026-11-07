@@ -19,12 +19,39 @@ from app.strategies.registry import register
 class EmaParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    underlying: str = "NIFTY"
-    interval_minutes: int = Field(default=5, ge=1, le=60)
-    fast: int = Field(default=9, ge=2)
-    slow: int = Field(default=21, ge=3)
-    lots: int = Field(default=1, ge=1)
-    last_entry_time: time = time(15, 0)
+    underlying: str = Field(
+        default="NIFTY", title="Index to trade", description="Which index future to trade."
+    )
+    interval_minutes: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        title="Candle size (minutes)",
+        description="How often the robot looks at the price, e.g. every 5 minutes.",
+    )
+    fast: int = Field(
+        default=9,
+        ge=2,
+        title="Fast average (candles)",
+        description="Short average that reacts quickly. Must be smaller than the slow one.",
+    )
+    slow: int = Field(
+        default=21,
+        ge=3,
+        title="Slow average (candles)",
+        description="Long average that reacts slowly.",
+    )
+    lots: int = Field(
+        default=1,
+        ge=1,
+        title="Lots per trade",
+        description="How many lots to buy or sell each time. Start with 1.",
+    )
+    last_entry_time: time = Field(
+        default=time(15, 0),
+        title="No new trades after",
+        description="The robot stops opening new trades after this time.",
+    )
 
     @model_validator(mode="after")
     def _fast_below_slow(self) -> EmaParams:
@@ -43,6 +70,24 @@ def ema_step(prev: float | None, price: float, period: int) -> float:
 @register
 class EmaCrossover(Strategy):
     name = "ema_crossover"
+    title = "Trend follower"
+    summary = (
+        "Buys the NIFTY future when prices start rising and sells when they start "
+        "falling, using two moving averages. Closes everything by 3:15 PM."
+    )
+    how_it_works = (
+        "Every few minutes it calculates two averages of the NIFTY price: a fast one "
+        "(recent prices) and a slow one (a longer period).",
+        "When the fast average moves above the slow one, prices are rising: it buys 1 lot.",
+        "When the fast average moves below the slow one, prices are falling: it closes "
+        "the buy and sells instead.",
+        "It stops opening new trades in the afternoon, and everything is closed at 3:15 PM.",
+    )
+    risk_level = "medium"
+    risk_note = (
+        "Makes money when the market moves strongly in one direction. Loses small "
+        "amounts again and again when the market moves sideways."
+    )
     Params = EmaParams
     product = Product.MIS
 

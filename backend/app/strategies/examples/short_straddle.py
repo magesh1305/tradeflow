@@ -22,17 +22,59 @@ from app.strategies.registry import register
 class StraddleParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    underlying: str = "NIFTY"
-    entry_time: time = time(9, 20)
-    exit_time: time = time(15, 0)
-    lots: int = Field(default=1, ge=1)
-    stop_loss_pct: float = Field(default=30.0, gt=0, le=500)
-    exchange_stops: bool = True
+    underlying: str = Field(
+        default="NIFTY", title="Index to trade", description="Which index's options to sell."
+    )
+    entry_time: time = Field(
+        default=time(9, 20), title="Start time", description="When to sell the two options."
+    )
+    exit_time: time = Field(
+        default=time(15, 0), title="Close time", description="When to buy them back and finish."
+    )
+    lots: int = Field(
+        default=1,
+        ge=1,
+        title="Lots per trade",
+        description="How many lots of each option to sell. Start with 1.",
+    )
+    stop_loss_pct: float = Field(
+        default=30.0,
+        gt=0,
+        le=500,
+        title="Stop loss (%)",
+        description="If an option's price rises this much above what you sold it for, "
+        "it is bought back to stop the loss.",
+    )
+    exchange_stops: bool = Field(
+        default=True,
+        title="Place stop loss with the exchange",
+        description="Also keep the stop loss order at Zerodha, as a safety backup.",
+    )
 
 
 @register
 class ShortStraddle(Strategy):
     name = "short_straddle"
+    title = "Quiet-day option seller"
+    summary = (
+        "Sells one Call and one Put option in the morning and collects money upfront. "
+        "Profits if NIFTY stays calm; each side has a stop loss."
+    )
+    how_it_works = (
+        "In the morning it sells a Call option and a Put option at today's NIFTY "
+        "level, and collects their price upfront.",
+        "Options lose value as the day goes on. If NIFTY stays close to the morning "
+        "level, both get cheaper and it buys them back for less: that is the profit.",
+        "If NIFTY moves a lot, one option gets expensive. When it rises 30% above its "
+        "selling price, it is bought back automatically (the stop loss).",
+        "Both options are placed together: if one fails, the other is closed at once. "
+        "Everything is closed in the afternoon.",
+    )
+    risk_level = "high"
+    risk_note = (
+        "Wins small amounts on calm days but can lose much more on big-move days "
+        "(news, budget, results). Switched off by default."
+    )
     Params = StraddleParams
     product = Product.MIS
 

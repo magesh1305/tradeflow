@@ -26,6 +26,8 @@ class StrategyInfo(BaseModel):
     strategy: str
     state: str
     has_lots: bool
+    title: str = ""
+    risk_level: str = "medium"
 
 
 class SettingsOut(BaseModel):
@@ -71,6 +73,8 @@ def _strategies(runtime: Any) -> list[StrategyInfo]:
             strategy=slot.strategy.name,
             state=slot.state.value,
             has_lots="lots" in type(slot.strategy.params).model_fields,
+            title=slot.strategy.title or sid,
+            risk_level=slot.strategy.risk_level,
         )
         for sid, slot in engine.slots.items()
     ]

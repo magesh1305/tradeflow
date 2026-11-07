@@ -19,6 +19,7 @@ from app.api.schemas import (
     StrategyOut,
 )
 from app.core.models import Fill, Order
+from app.data.instruments import InstrumentStore
 from app.data.option_chain import ChainRow, OptionQuote
 from app.engine.engine import StrategySlot, TradingEngine
 from app.engine.positions import PnlSummary, Position
@@ -40,6 +41,8 @@ def position(p: Position, stop: float | None = None) -> PositionOut:
         strategy_id=p.strategy_id,
         exchange=str(p.instrument.exchange),
         tradingsymbol=p.instrument.tradingsymbol,
+        label=p.instrument.label,
+        lot_size=p.instrument.lot_size,
         instrument_token=p.instrument.token,
         product=str(p.product),
         quantity=p.quantity,
@@ -65,6 +68,8 @@ def order(o: Order, mode: str) -> OrderOut:
         strategy_id=r.strategy_id,
         exchange=str(r.instrument.exchange),
         tradingsymbol=r.instrument.tradingsymbol,
+        label=r.instrument.label,
+        lot_size=r.instrument.lot_size,
         side=str(r.side),
         quantity=r.quantity,
         order_type=str(r.order_type),
@@ -92,6 +97,8 @@ def fill(f: Fill, mode: str, charges: float) -> FillOut:
         strategy_id=f.strategy_id,
         exchange=str(f.instrument.exchange),
         tradingsymbol=f.instrument.tradingsymbol,
+        label=f.instrument.label,
+        lot_size=f.instrument.lot_size,
         side=str(f.side),
         quantity=f.quantity,
         price=f.price,
@@ -104,9 +111,13 @@ def fill(f: Fill, mode: str, charges: float) -> FillOut:
 
 def strategy(engine: TradingEngine, slot: StrategySlot) -> StrategyOut:
     sid = slot.strategy.id
+    st = slot.strategy
     return StrategyOut(
         id=sid,
-        strategy=slot.strategy.name,
+        strategy=st.name,
+        title=st.title or st.name,
+        summary=st.summary,
+        risk_level=st.risk_level,
         state=slot.state.value,
         error=slot.error,
         pnl=pnl(engine.positions.pnl(sid)),
@@ -120,6 +131,8 @@ def strategy_detail(engine: TradingEngine, slot: StrategySlot) -> StrategyDetail
     stops = engine.stops.protected()
     return StrategyDetail(
         **base.model_dump(),
+        how_it_works=list(slot.strategy.how_it_works),
+        risk_note=slot.strategy.risk_note,
         params=slot.strategy.params.model_dump(mode="json"),
         params_schema=slot.strategy.Params.model_json_schema(),
         positions=[
@@ -196,12 +209,22 @@ def chain_row(r: ChainRow) -> ChainRowOut:
     return ChainRowOut(strike=r.strike, is_atm=r.is_atm, call=_quote(r.call), put=_quote(r.put))
 
 
-def db_order(row: dict[str, Any]) -> OrderOut:
+def _names(row: dict[str, Any], instruments: InstrumentStore | None) -> dict[str, Any]:
+    inst = instruments.find(f"{row['exchange']}:{row['tradingsymbol']}") if instruments else None
+    if inst is None:
+        return {"label": row["tradingsymbol"], "lot_size": 1}
+    return {"label": inst.label, "lot_size": inst.lot_size}
+
+
+def db_order(row: dict[str, Any], instruments: InstrumentStore | None = None) -> OrderOut:
     return OrderOut(
         **{k: row.get(k) for k in OrderOut.model_fields if k in row},
         protective=row.get("reason") == "protective stop",
+        **_names(row, instruments),
     )
 
 
-def db_fill(row: dict[str, Any]) -> FillOut:
-    return FillOut(**{k: row[k] for k in FillOut.model_fields if k in row})
+def db_fill(row: dict[str, Any], instruments: InstrumentStore | None = None) -> FillOut:
+    return FillOut(
+        **{k: row[k] for k in FillOut.model_fields if k in row}, **_names(row, instruments)
+    )

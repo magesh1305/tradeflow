@@ -160,7 +160,9 @@ async def list_orders(
     rows: dict[str, OrderOut] = {}
     try:
         for r in await runtime.journal.store.query_orders(f):
-            rows[r["client_order_id"]] = views.db_order(r)
+            rows[r["client_order_id"]] = views.db_order(
+                r, runtime.engine.instruments if runtime.engine else None
+            )
     except Exception:
         log.exception("order history query failed; showing live orders only")
     e = runtime.engine
@@ -186,7 +188,9 @@ async def list_fills(
     rows: dict[str, FillOut] = {}
     try:
         for r in await runtime.journal.store.query_fills(f):
-            rows[r["fill_id"]] = views.db_fill(r)
+            rows[r["fill_id"]] = views.db_fill(
+                r, runtime.engine.instruments if runtime.engine else None
+            )
     except Exception:
         log.exception("fill history query failed; showing live fills only")
     e = runtime.engine

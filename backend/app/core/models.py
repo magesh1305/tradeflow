@@ -98,6 +98,19 @@ class Instrument:
     def is_option(self) -> bool:
         return self.instrument_type in (InstrumentType.CE, InstrumentType.PE)
 
+    @property
+    def label(self) -> str:
+        """Readable name for people new to trading, e.g. 'NIFTY 24000 Call · 10 Nov'."""
+        exp = f"{self.expiry.day} {self.expiry:%b}" if self.expiry else ""
+        if self.instrument_type is InstrumentType.CE:
+            return f"{self.name} {self.strike:g} Call · {exp}"
+        if self.instrument_type is InstrumentType.PE:
+            return f"{self.name} {self.strike:g} Put · {exp}"
+        if self.instrument_type is InstrumentType.FUT:
+            month = f" · {self.expiry:%b}" if self.expiry else ""
+            return f"{self.name} Future{month}"
+        return self.tradingsymbol
+
     def round_price(self, price: float) -> float:
         """Round to the nearest valid tick."""
         ticks = round(price / self.tick_size)

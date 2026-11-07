@@ -70,6 +70,12 @@ class Strategy:
     """Subclass, set `name` and `Params`, decorate with `@register`."""
 
     name: ClassVar[str] = ""
+    # Plain-English description for the dashboard (for people new to trading).
+    title: ClassVar[str] = ""
+    summary: ClassVar[str] = ""
+    how_it_works: ClassVar[tuple[str, ...]] = ()
+    risk_level: ClassVar[str] = "medium"  # "low" | "medium" | "high"
+    risk_note: ClassVar[str] = ""
     Params: ClassVar[type[BaseModel]] = NoParams
     product: ClassVar[Product] = Product.MIS
 
