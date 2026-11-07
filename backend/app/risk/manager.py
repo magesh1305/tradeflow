@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 
 from app.config import Settings
 from app.core.clock import Clock
-from app.core.models import Order, OrderRequest, Tick
+from app.core.models import Instrument, Order, OrderRequest, Side, Tick
 from app.engine.positions import PositionBook
 
 log = logging.getLogger(__name__)
@@ -58,6 +58,30 @@ class RiskLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class StrategyLimits:
+    """Per-strategy limits from the daily plan (None = no limit)."""
+
+    max_trades_per_day: int | None = None
+    loss_limit: float | None = None
+    profit_target: float | None = None
+    max_lots_per_order: int | None = None
+    max_capital: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PlanLimits:
+    """Daily-plan limits on top of RiskLimits (None = no limit)."""
+
+    profit_target: float | None = None
+    max_trades_per_day: int | None = None
+    strategies: dict[str, StrategyLimits] = field(default_factory=dict)
+
+
+# (instrument, side, quantity, price) -> estimated margin in INR
+MarginEstimator = Callable[[Instrument, Side, int, float | None], float]
+
+
+@dataclass(frozen=True, slots=True)
 class RiskDecision:
     allowed: bool
     is_exit: bool
@@ -90,6 +114,10 @@ class RiskManager:
         self._clock = clock
         self._recent: deque[tuple[datetime, OrderRequest]] = deque()  # accepted entries
         self.rejections = 0
+        self.plan = PlanLimits()
+        self.estimator: MarginEstimator | None = None
+        # Today's new entries per strategy, keyed by leg group (one trade) or order id.
+        self._entries: dict[str, set[str]] = {}
 
     # --- classification ------------------------------------------------------
 
@@ -118,7 +146,11 @@ class RiskManager:
         pending = list(pending)
         if self.is_exit(req, pending):
             return RiskDecision(True, is_exit=True)
-        reason = self._entry_violation(req, pending) or self._liquidity_violation(req, quote)
+        reason = (
+            self._entry_violation(req, pending)
+            or self._plan_violation(req, pending)
+            or self._liquidity_violation(req, quote)
+        )
         if reason:
             self.rejections += 1
             log.warning(
@@ -131,7 +163,91 @@ class RiskManager:
             )
             return RiskDecision(False, is_exit=False, reason=reason)
         self._recent.append((self._clock.now(), req))
+        if not req.protective:
+            self._entries.setdefault(req.strategy_id, set()).add(
+                req.leg_group_id or req.client_order_id
+            )
         return RiskDecision(True, is_exit=False)
+
+    # --- daily plan limits --------------------------------------------------------
+
+    def trades_today(self, strategy_id: str | None = None) -> int:
+        if strategy_id is not None:
+            return len(self._entries.get(strategy_id, ()))
+        return sum(len(v) for v in self._entries.values())
+
+    def _new_trade(self, req: OrderRequest) -> bool:
+        """A leg of a group already counted is not a new trade."""
+        return not (req.leg_group_id and req.leg_group_id in self._entries.get(req.strategy_id, ()))
+
+    def _plan_violation(self, req: OrderRequest, pending: list[Order]) -> str:
+        plan = self.plan
+        sid = req.strategy_id
+        lim = plan.strategies.get(sid, StrategyLimits())
+        if plan.profit_target is not None and self._positions.pnl().net >= plan.profit_target:
+            return f"account profit target {plan.profit_target:,.0f} reached: no new trades today"
+        if lim.profit_target is not None and self._positions.pnl(sid).net >= lim.profit_target:
+            return f"{sid} profit target {lim.profit_target:,.0f} reached: no new trades today"
+        new = self._new_trade(req)
+        if (
+            new
+            and plan.max_trades_per_day is not None
+            and (self.trades_today() >= plan.max_trades_per_day)
+        ):
+            return f"max {plan.max_trades_per_day} trades per day reached (account)"
+        if (
+            new
+            and lim.max_trades_per_day is not None
+            and (self.trades_today(sid) >= lim.max_trades_per_day)
+        ):
+            return f"max {lim.max_trades_per_day} trades per day reached ({sid})"
+        lots = req.quantity // req.instrument.lot_size
+        if lim.max_lots_per_order is not None and lots > lim.max_lots_per_order:
+            return f"{lots} lots exceeds {sid} max {lim.max_lots_per_order} per order"
+        if lim.max_capital is not None and self.estimator is not None:
+            est = self.estimator
+            used = sum(
+                est(
+                    p.instrument,
+                    Side.BUY if p.quantity > 0 else Side.SELL,
+                    abs(p.quantity),
+                    p.average_price,
+                )
+                for p in self._positions.open_positions(sid)
+            ) + sum(
+                est(o.request.instrument, o.request.side, o.pending_quantity, o.request.price)
+                for o in pending
+                if o.request.strategy_id == sid and not o.request.protective
+            )
+            need = est(req.instrument, req.side, req.quantity, req.price)
+            if used + need > lim.max_capital:
+                return (
+                    f"{sid} capital limit {lim.max_capital:,.0f}: would use "
+                    f"{used + need:,.0f} (estimate)"
+                )
+        return ""
+
+    def strategies_over_loss_limit(self) -> list[tuple[str, float, float]]:
+        """(strategy, net P&L, limit) for strategies whose net loss reached their limit."""
+        out = []
+        for sid, lim in self.plan.strategies.items():
+            if lim.loss_limit is not None:
+                net = self._positions.pnl(sid).net
+                if net <= -lim.loss_limit:
+                    out.append((sid, net, lim.loss_limit))
+        return out
+
+    def profit_targets_reached(self) -> list[str]:
+        """'account' and/or strategy ids whose profit target is reached."""
+        out = []
+        if self.plan.profit_target is not None and (
+            self._positions.pnl().net >= self.plan.profit_target
+        ):
+            out.append("account")
+        for sid, lim in self.plan.strategies.items():
+            if lim.profit_target is not None and self._positions.pnl(sid).net >= lim.profit_target:
+                out.append(sid)
+        return out
 
     def _entry_violation(self, req: OrderRequest, pending: list[Order]) -> str:
         lim = self.limits
@@ -217,3 +333,4 @@ class RiskManager:
         """Start-of-day reset (09:00 job). The kill switch is reset separately, by a human."""
         self._recent.clear()
         self.rejections = 0
+        self._entries.clear()
