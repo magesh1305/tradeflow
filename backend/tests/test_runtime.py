@@ -81,6 +81,13 @@ async def test_sim_runtime_starts_engine_and_writes_eod(tmp_path: Path) -> None:
     try:
         assert rt.engine is not None and rt.engine.running
         assert rt.recovery is not None and rt.recovery.ok
+        # Nothing trades until today's plan is submitted (Settings tab).
+        assert rt.engine.slots["ema"].state.value == "STOPPED"
+        assert not rt.engine.plan_submitted
+        plan, submitted = await rt.plan_for_form()
+        assert not submitted and plan.strategies["ema"].enabled
+        result = await rt.submit_plan(plan)
+        assert result["started"] == ["ema"]
         assert rt.engine.slots["ema"].state.value == "RUNNING"
         assert isinstance(rt.engine.executor, PaperExecutor)
         await rt.end_of_day()

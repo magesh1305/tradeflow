@@ -21,6 +21,10 @@ _SETTING_PREFIXES = (
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Never read a developer's .env (it may hold real tokens or MODE=live).
+    from app.config import Settings  # noqa: PLC0415
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     for key in list(os.environ):
         if key.upper().startswith(_SETTING_PREFIXES):
             monkeypatch.delenv(key, raising=False)

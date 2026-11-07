@@ -114,7 +114,7 @@ async def test_every_route_except_health_and_auth_requires_admin_token(env: Env)
             r = await env.client.request(method.upper(), path, headers={"X-Admin-Token": "x" * 30})
             assert r.status_code == 401, (method, path)
             checked += 1
-    assert checked == 19  # 17 control routes + 2 recovery routes; update when adding routes
+    assert checked == 22  # 17 control + 2 recovery + 3 settings routes; update when adding routes
     assert (await env.client.get("/health")).status_code == 200
     # Interactive docs are unauthenticated, so they are off by default.
     assert (await env.client.get("/docs")).status_code == 404

@@ -71,3 +71,40 @@ async def test_sql_history_and_backtest_stores() -> None:
         assert (await runs.list())[0]["id"] == rid
     finally:
         await engine.dispose()
+
+
+async def test_sql_plan_store() -> None:
+    if not URL or not await _reachable(URL):
+        pytest.skip("TEST_DATABASE_URL not set or unreachable")
+    from app.storage.plans import SqlPlanStore  # noqa: PLC0415
+
+    await asyncio.to_thread(
+        subprocess.run,
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=BACKEND,
+        env={**os.environ, "DATABASE_URL": URL},
+        check=True,
+    )
+    engine = make_engine(URL)
+    try:
+        async with engine.begin() as conn:
+            for t in ("plan_events", "daily_plans"):
+                await conn.execute(text(f"DELETE FROM {t}"))  # noqa: S608 - fixed names
+        store = SqlPlanStore(make_sessionmaker(engine))
+        t0 = datetime(2025, 11, 3, 9, 0, tzinfo=IST)
+        d1, d2 = date(2025, 11, 3), date(2025, 11, 4)
+        await store.save(d1, "paper", {"v": 1}, now=t0, changes=["plan submitted"], loosened=[])
+        await store.save(
+            d1, "paper", {"v": 2}, now=t0 + timedelta(hours=2), changes=["x"], loosened=["y"]
+        )
+        await store.save(d2, "paper", {"v": 3}, now=t0 + timedelta(days=1), changes=[], loosened=[])
+        got = await store.get(d1, "paper")
+        assert got is not None and got.plan == {"v": 2}
+        assert got.submitted_at == t0  # first submission time is kept
+        assert await store.get(d1, "live") is None
+        latest = await store.latest("paper")
+        assert latest is not None and latest.trading_date == d2
+        events = await store.events(d1, "paper")
+        assert [e["loosened"] for e in events] == [["y"], []]
+    finally:
+        await engine.dispose()
